@@ -6,30 +6,14 @@ using RPG.Data;
 namespace RPG.UI
 {
     /// <summary>
-    /// ItemTooltipUI v1 — Tooltip flutuante com detalhes do item.
+    /// ItemTooltipUI v2 — Equipment patch integrado.
     ///
-    /// Aparece ao passar o mouse sobre um slot de inventário ou slot de joia.
-    /// Segue o cursor com um offset para não ficar sob o ponteiro.
-    ///
-    /// SETUP:
-    ///   1. Crie um Canvas (ScreenSpace-Overlay) chamado "TooltipCanvas" com
-    ///      Sort Order alto (ex: 100) para ficar sobre tudo.
-    ///   2. Adicione um Panel filho chamado "TooltipPanel" com este componente.
-    ///   3. Configure as referências no Inspector.
-    ///   4. O painel começa INATIVO — só aparece quando Show() é chamado.
-    ///
-    /// PREFAB HIERARQUIA:
-    ///   TooltipPanel (RectTransform + CanvasGroup + ItemTooltipUI)
-    ///     ├── ItemName      (TMP_Text — nome em cor da raridade)
-    ///     ├── ItemRarity    (TMP_Text — "Raro", "Épico" etc)
-    ///     ├── ItemType      (TMP_Text — "Joia do Poder", "Consumível" etc)
-    ///     ├── Divider       (Image — linha separadora)
-    ///     ├── Description   (TMP_Text — descrição do item)
-    ///     ├── SkillInfo     (GameObject — só visível para PowerGem)
-    ///     │   ├── SkillName (TMP_Text)
-    ///     │   └── SkillStats(TMP_Text — cooldown, mana, range)
-    ///     └── ConsumableInfo(GameObject — só visível para Consumable)
-    ///         └── ConsumableStats (TMP_Text — heal, mana, duração)
+    /// CORREÇÕES v2:
+    ///   - Seção de Equipment adicionada diretamente (sem patch externo).
+    ///     Exibe slot, bônus e requisitos do equipamento ao passar o mouse.
+    ///   - Seção de PowerGem mantida intacta.
+    ///   - Seção de Consumible mantida intacta.
+    ///   - ItemTooltipUI_EquipmentPatch.cs pode ser deletado — não é mais necessário.
     /// </summary>
     public class ItemTooltipUI : MonoBehaviour
     {
@@ -39,7 +23,7 @@ namespace RPG.UI
         [SerializeField] private RectTransform tooltipRect;
         [SerializeField] private CanvasGroup   canvasGroup;
 
-        [Header("Textos")]
+        [Header("Textos comuns")]
         [SerializeField] private TMP_Text itemNameText;
         [SerializeField] private TMP_Text itemRarityText;
         [SerializeField] private TMP_Text itemTypeText;
@@ -54,9 +38,14 @@ namespace RPG.UI
         [SerializeField] private GameObject consumableSection;
         [SerializeField] private TMP_Text   consumableStatsText;
 
+        [Header("Seção Equipment — crie um filho 'EquipmentSection' no prefab do tooltip")]
+        [SerializeField] private GameObject equipmentSection;
+        [SerializeField] private TMP_Text   equipSlotNameText;
+        [SerializeField] private TMP_Text   equipStatsText;
+
         [Header("Comportamento")]
-        [SerializeField] private Vector2 offset         = new Vector2(15f, -10f);
-        [SerializeField] private float   edgePadding    = 10f;
+        [SerializeField] private Vector2 offset      = new Vector2(15f, -10f);
+        [SerializeField] private float   edgePadding = 10f;
 
         private Canvas _canvas;
         private bool   _visible = false;
@@ -65,7 +54,6 @@ namespace RPG.UI
         {
             if (Instance != null && Instance != this) { Destroy(gameObject); return; }
             Instance = this;
-
             _canvas = GetComponentInParent<Canvas>();
             Hide();
         }
@@ -91,7 +79,6 @@ namespace RPG.UI
 
             gameObject.SetActive(true);
             _visible = true;
-
             FollowCursor();
         }
 
@@ -105,7 +92,7 @@ namespace RPG.UI
 
         private void PopulateContent(ItemData item)
         {
-            // Nome com cor da raridade
+            // Nome
             if (itemNameText != null)
             {
                 itemNameText.text  = item.DisplayName;
@@ -124,10 +111,10 @@ namespace RPG.UI
             {
                 itemTypeText.text = item.Type switch
                 {
-                    ItemType.PowerGem   => "✦ Joia do Poder",
-                    ItemType.Equipment  => "⚔ Equipamento",
-                    ItemType.Consumable => "⬡ Consumível",
-                    ItemType.Misc       => "◈ Miscelânea",
+                    ItemType.PowerGem   => "\u2726 Joia do Poder",
+                    ItemType.Equipment  => "\u2694 Equipamento",
+                    ItemType.Consumable => "\u2b21 Consumível",
+                    ItemType.Misc       => "\u25c8 Miscelânea",
                     _                   => item.Type.ToString()
                 };
             }
@@ -136,7 +123,7 @@ namespace RPG.UI
             if (descriptionText != null)
                 descriptionText.text = item.Description;
 
-            // Seção PowerGem
+            // ── Seção PowerGem ─────────────────────────────────────────────
             bool isGem = item.IsPowerGem && item.EmbeddedSkill != null;
             if (gemSection != null) gemSection.SetActive(isGem);
 
@@ -145,7 +132,7 @@ namespace RPG.UI
                 var skill = item.EmbeddedSkill;
 
                 if (gemSkillNameText  != null)
-                    gemSkillNameText.text = $"⚡ {skill.Name}";
+                    gemSkillNameText.text = $"\u26a1 {skill.Name}";
 
                 if (gemSkillStatsText != null)
                 {
@@ -158,17 +145,59 @@ namespace RPG.UI
                 }
             }
 
-            // Seção Consumível
+            // ── Seção Consumível ───────────────────────────────────────────
             bool isConsumable = item.IsConsumable;
             if (consumableSection != null) consumableSection.SetActive(isConsumable);
 
             if (isConsumable && consumableStatsText != null)
             {
                 string stats = "";
-                if (item.HealAmount  > 0f) stats += $"❤ Recupera {item.HealAmount:0} HP\n";
-                if (item.ManaAmount  > 0f) stats += $"✦ Recupera {item.ManaAmount:0} MP\n";
-                if (item.BuffDuration > 0f) stats += $"⏱ Duração: {item.BuffDuration:0}s\n";
+                if (item.HealAmount   > 0f) stats += $"\u2764 Recupera {item.HealAmount:0} HP\n";
+                if (item.ManaAmount   > 0f) stats += $"\u2726 Recupera {item.ManaAmount:0} MP\n";
+                if (item.BuffDuration > 0f) stats += $"\u23f1 Duração: {item.BuffDuration:0}s\n";
                 consumableStatsText.text = stats.TrimEnd();
+            }
+
+            // ── Seção Equipment ────────────────────────────────────────────
+            bool isEquipment = item.Type == ItemType.Equipment;
+            if (equipmentSection != null) equipmentSection.SetActive(isEquipment && !isGem);
+
+            if (isEquipment && !isGem)
+            {
+                var eqData = EquipmentDatabase.Instance?.GetEquipment(item.ItemId);
+                if (eqData != null)
+                {
+                    if (equipSlotNameText != null)
+                        equipSlotNameText.text = $"\u2694 {eqData.SlotDisplayName}";
+
+                    if (equipStatsText != null)
+                    {
+                        string text = eqData.GetStatsTooltip();
+
+                        // Requisitos
+                        bool hasReqs = eqData.RequiredLevel > 0 || eqData.RequiredSTR > 0
+                                    || eqData.RequiredAGI   > 0 || eqData.RequiredVIT > 0
+                                    || eqData.RequiredDEX   > 0 || eqData.RequiredINT > 0;
+                        if (hasReqs)
+                        {
+                            string reqs = "\n<color=#FF8888>Requisitos:</color>\n";
+                            if (eqData.RequiredLevel > 0) reqs += $"  Nível {eqData.RequiredLevel}\n";
+                            if (eqData.RequiredSTR   > 0) reqs += $"  STR {eqData.RequiredSTR}\n";
+                            if (eqData.RequiredAGI   > 0) reqs += $"  AGI {eqData.RequiredAGI}\n";
+                            if (eqData.RequiredVIT   > 0) reqs += $"  VIT {eqData.RequiredVIT}\n";
+                            if (eqData.RequiredDEX   > 0) reqs += $"  DEX {eqData.RequiredDEX}\n";
+                            if (eqData.RequiredINT   > 0) reqs += $"  INT {eqData.RequiredINT}\n";
+                            text += reqs.TrimEnd();
+                        }
+
+                        equipStatsText.text = text;
+                    }
+                }
+                else if (equipStatsText != null)
+                {
+                    // Equipamento sem EquipmentData — fallback
+                    equipStatsText.text = "<color=#888>Sem dados de equipamento.</color>";
+                }
             }
         }
 
@@ -178,17 +207,13 @@ namespace RPG.UI
         {
             if (tooltipRect == null || _canvas == null) return;
 
-            Vector2 mousePos = Input.mousePosition;
-
-            // Converte para espaço do canvas
             RectTransformUtility.ScreenPointToLocalPointInRectangle(
                 _canvas.transform as RectTransform,
-                mousePos, _canvas.worldCamera,
+                Input.mousePosition, _canvas.worldCamera,
                 out Vector2 localPoint);
 
             Vector2 targetPos = localPoint + offset;
 
-            // Clamp para não sair da tela
             var canvasRect = _canvas.transform as RectTransform;
             if (canvasRect != null)
             {
@@ -196,11 +221,9 @@ namespace RPG.UI
                 float halfH = tooltipRect.rect.height * 0.5f;
                 float maxX  = canvasRect.rect.width  * 0.5f - halfW - edgePadding;
                 float maxY  = canvasRect.rect.height * 0.5f - halfH - edgePadding;
-                float minX  = -maxX;
-                float minY  = -maxY;
 
-                targetPos.x = Mathf.Clamp(targetPos.x, minX, maxX);
-                targetPos.y = Mathf.Clamp(targetPos.y, minY, maxY);
+                targetPos.x = Mathf.Clamp(targetPos.x, -maxX, maxX);
+                targetPos.y = Mathf.Clamp(targetPos.y, -maxY, maxY);
             }
 
             tooltipRect.anchoredPosition = targetPos;
