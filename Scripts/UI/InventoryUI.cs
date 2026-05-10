@@ -9,21 +9,20 @@ using System.Collections.Generic;
 namespace RPG.UI
 {
     /// <summary>
-    /// InventoryUI v3
+    /// InventoryUI v4 — EquipmentPatch integrado
     ///
-    /// CORREÇÕES v3:
+    /// ADIÇÕES v4:
+    ///   - Campo [SerializeField] private Button equipEquipmentButton
+    ///   - Listener registrado no Start()
+    ///   - ShowActionPanel exibe o botão para itens do tipo Equipment
+    ///   - Método OnEquipEquipmentClicked abre EquipmentUI.OpenForEquip()
     ///
-    ///   BUG-24 — OnDestroy só cancelava InvokeRepeating se _bindRetrying==true:
-    ///     Se StopBindRetry() fosse chamado com a flag false por qualquer razão,
-    ///     o InvokeRepeating continuava rodando mesmo após o objeto ser destruído.
-    ///     SOLUÇÃO: OnDestroy() sempre chama CancelInvoke(nameof(RetryBind))
-    ///     independente de _bindRetrying, garantindo limpeza completa.
-    ///
-    ///   Todas as correções v2 mantidas:
-    ///     - TryBindInventory() sem polling no Update().
-    ///     - RefreshAll() copia SyncList uma vez para evitar enumeração dupla.
-    ///     - EnsurePoolSize() só expande, não destrói.
-    ///     - DeselectAll() limpa _selectedSlot antes de SetSelected(false).
+    /// CORREÇÕES v3 mantidas:
+    ///   - OnDestroy sempre cancela InvokeRepeating independente de flag
+    ///   - TryBindInventory sem polling no Update
+    ///   - RefreshAll copia SyncList uma vez
+    ///   - EnsurePoolSize só expande
+    ///   - DeselectAll limpa _selectedSlot antes de SetSelected(false)
     /// </summary>
     public class InventoryUI : MonoBehaviour
     {
@@ -46,6 +45,8 @@ namespace RPG.UI
         [SerializeField] private Image      actionItemIcon;
         [SerializeField] private Button     useButton;
         [SerializeField] private Button     equipGemButton;
+        // PATCH v4: botão de equipar equipamento
+        [SerializeField] private Button     equipEquipmentButton;
         [SerializeField] private Button     discardButton;
         [SerializeField] private TMP_Text   useButtonLabel;
 
@@ -70,6 +71,8 @@ namespace RPG.UI
             if (closeButton    != null) closeButton.onClick.AddListener(Close);
             if (useButton      != null) useButton.onClick.AddListener(OnUseClicked);
             if (equipGemButton != null) equipGemButton.onClick.AddListener(OnEquipGemClicked);
+            // PATCH v4
+            if (equipEquipmentButton != null) equipEquipmentButton.onClick.AddListener(OnEquipEquipmentClicked);
             if (discardButton  != null) discardButton.onClick.AddListener(OnDiscardClicked);
 
             if (titleText != null) titleText.text = "Inventário";
@@ -267,6 +270,8 @@ namespace RPG.UI
 
             bool isConsumable = itemData.IsConsumable;
             bool isGem        = itemData.IsPowerGem;
+            // PATCH v4
+            bool isEquipment  = itemData.Type == ItemType.Equipment;
 
             if (useButton != null)
             {
@@ -276,6 +281,10 @@ namespace RPG.UI
 
             if (equipGemButton != null)
                 equipGemButton.gameObject.SetActive(isGem);
+
+            // PATCH v4: mostra botão de equipar para equipamentos
+            if (equipEquipmentButton != null)
+                equipEquipmentButton.gameObject.SetActive(isEquipment);
 
             if (discardButton != null)
                 discardButton.gameObject.SetActive(true);
@@ -299,6 +308,16 @@ namespace RPG.UI
             if (!_selectedSlot.ItemData.IsPowerGem) return;
 
             PowerGemUI.Instance?.OpenForEquip(_selectedSlot.SlotData);
+            Close();
+        }
+
+        // PATCH v4: abre EquipmentUI para equipar item de equipamento
+        private void OnEquipEquipmentClicked()
+        {
+            if (_selectedSlot == null || _selectedSlot.IsEmpty) return;
+            if (_selectedSlot.ItemData.Type != ItemType.Equipment) return;
+
+            EquipmentUI.Instance?.OpenForEquip(_selectedSlot.SlotData);
             Close();
         }
 
