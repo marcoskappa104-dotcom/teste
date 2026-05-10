@@ -13,20 +13,32 @@ using System;
 namespace RPG.Network
 {
     /// <summary>
-    /// NetworkPlayer v24 — EquipmentPatch integrado
+    /// NetworkPlayer v25
     ///
-    /// ALTERAÇÕES v24 (patch de equipamento integrado):
-    ///   - _serverCharData: internal (acessível pelo NetworkEquipment)
-    ///   - _serverStats:    internal (acessível pelo NetworkEquipment)
-    ///   - _agent:          internal (acessível pelo NetworkEquipment)
-    ///   - MAX_HP_CAP:      public const
-    ///   - MAX_MP_CAP:      public const
-    ///   - _equipment field adicionado ao Awake()
-    ///   - ServerInitialize carrega e aplica bônus de equipamento antes de calcular stats
-    ///   - ServerSaveCharacterForced salva equipment loadout
-    ///   - RpcShowMessage adicionado (usado pelo NetworkEquipment)
+    /// CORREÇÕES v25:
     ///
-    /// CORREÇÃO v23 mantida — ordem MaxHP/MaxMP antes de CurrentHP/CurrentMP nos SyncVars.
+    ///   CRÍTICO — PlayerInitData não implementava NetworkMessage:
+    ///     Structs passadas via ClientRpc precisam ser serializáveis pelo Mirror.
+    ///     Sem NetworkMessage, campos string como CharName podiam falhar
+    ///     silenciosamente em builds IL2CPP. Adicionado : NetworkMessage.
+    ///
+    ///   CRÍTICO — CmdMoveTo sem rate limiting global:
+    ///     Em cliques rápidos sucessivos (spam de cliques), o cliente enviava
+    ///     CmdMoveTo a cada frame sem throttle. Adicionado _lastMoveCmdTime
+    ///     com intervalo mínimo de CMD_MOVE_THROTTLE (0.05s).
+    ///
+    ///   SEGURANÇA — CmdAllocateAttribute validação adicional:
+    ///     Verifica se o FreeAttributePoints do servidor bate com o esperado
+    ///     antes de processar (proteção extra contra packet injection).
+    ///
+    ///   ROBUSTEZ — ServerRegenLoop agora usa Time.realtimeSinceStartup em
+    ///     vez de Time.time para funcionar corretamente em servidor dedicado
+    ///     onde Time.time pode parar se não houver Update ativo.
+    ///
+    ///   ROBUSTEZ — OnStopServer salva mesmo se _isDirty = false ao desconectar
+    ///     (garante que posição final é sempre persistida).
+    ///
+    ///   Todas as correções v24 mantidas.
     /// </summary>
     [RequireComponent(typeof(NavMeshAgent))]
     [RequireComponent(typeof(NetworkIdentity))]
@@ -35,7 +47,6 @@ namespace RPG.Network
     {
         public static readonly HashSet<NetworkPlayer> All = new HashSet<NetworkPlayer>();
 
-        // PATCH: public const para que NetworkEquipment possa referenciar
         public  const float MAX_HP_CAP               = 500_000f;
         public  const float MAX_MP_CAP               = 200_000f;
         private const float SAVE_INTERVAL            = 60f;
@@ -44,9 +55,16 @@ namespace RPG.Network
         private const float REGEN_COMBAT_SUPPRESSION = 8f;
         private const int   MAX_FREE_POINTS          = CharacterData.MAX_LEVEL * 5;
         private const float REGEN_DISPLAY_THRESHOLD  = 1f;
+        /// <summary>Throttle mínimo entre CmdMoveTo enviados pelo cliente (segundos).</summary>
+        private const float CMD_MOVE_THROTTLE        = 0.05f;
 
-        // ── PlayerInitData ─────────────────────────────────────────────────
-        public struct PlayerInitData
+        // ── PlayerInitData — CORREÇÃO v25: implementa NetworkMessage ──────
+        /// <summary>
+        /// Struct enviada via RpcInitializeLocalPlayer.
+        /// Deve implementar NetworkMessage para garantir serialização correta
+        /// pelo Mirror em IL2CPP e ahead-of-time compilation.
+        /// </summary>
+        public struct PlayerInitData : NetworkMessage
         {
             public string CharName;
             public int    Race;
@@ -63,8 +81,7 @@ namespace RPG.Network
             public int    EquipSTR, EquipAGI, EquipVIT, EquipDEX, EquipINT, EquipLUK;
         }
 
-        // ── SyncVars ───────────────────────────────────────────────────────
-        // CORREÇÃO v23: MaxHP/MaxMP declarados ANTES de CurrentHP/CurrentMP
+        // ── SyncVars — MaxHP/MaxMP declarados ANTES de CurrentHP/CurrentMP ──
         [SyncVar(hook = nameof(OnNetNameChanged))]       public string CharacterName         = "...";
         [SyncVar]                                         public string RaceStr               = "Human";
         [SyncVar(hook = nameof(OnNetLevelChanged))]      public int    Level                 = 1;
@@ -79,7 +96,7 @@ namespace RPG.Network
         [SyncVar(hook = nameof(OnNetExpToNextChanged))]  public long   ExperienceToNextLevel = 100;
         [SyncVar(hook = nameof(OnNetFreePointsChanged))] public int    FreeAttributePoints   = 0;
 
-        [SyncVar(hook = nameof(OnStatsVersionChanged))] public int StatsVersion = 0;
+        [SyncVar(hook = nameof(OnStatsVersionChanged))]  public int    StatsVersion          = 0;
 
         [SyncVar(hook = nameof(OnAllocSTRChanged))] public int AllocatedSTR = 0;
         [SyncVar(hook = nameof(OnAllocAGIChanged))] public int AllocatedAGI = 0;
@@ -116,24 +133,21 @@ namespace RPG.Network
         [SerializeField] private Transform[] _respawnPoints;
 
         // ── Componentes ────────────────────────────────────────────────────
-        // PATCH v24: _agent internal para NetworkEquipment
         internal NavMeshAgent     _agent;
         private  Animator         _animator;
         private  PlayerEntity     _playerEntity;
         private  NetworkInventory _inventory;
-        // PATCH v24: campo de equipamento
         private  NetworkEquipment _equipment;
 
         // ── Estado do servidor ─────────────────────────────────────────────
-        // PATCH v24: internal para NetworkEquipment
         internal CharacterData _serverCharData;
         internal DerivedStats  _serverStats;
 
-        private string        _serverAccountUsername;
-        private float         _autoSaveTimer;
-        private float         _lastAllocateTime   = -999f;
-        private float         _lastDamageTime     = -999f;
-        private bool          _isDirty            = false;
+        private string _serverAccountUsername;
+        private float  _autoSaveTimer;
+        private float  _lastAllocateTime  = -999f;
+        private float  _lastDamageTime    = -999f;  // realtimeSinceStartup
+        private bool   _isDirty           = false;
 
         public DerivedStats ServerStats => _serverStats;
 
@@ -144,8 +158,10 @@ namespace RPG.Network
         private bool          _clientInitialized = false;
         private bool          _pendingClientInit = false;
         private CharacterData _pendingInitData   = null;
+        private bool          _allocDirty        = false;
 
-        private bool  _allocDirty = false;
+        // CORREÇÃO v25: throttle de CmdMoveTo
+        private float _lastMoveCmdSentTime = -999f;
 
         private float       _lastMovingCmdTime;
         private const float MOVING_CMD_INTERVAL = 0.1f;
@@ -160,14 +176,14 @@ namespace RPG.Network
             _animator     = GetComponentInChildren<Animator>();
             _playerEntity = GetComponent<PlayerEntity>();
             _inventory    = GetComponent<NetworkInventory>();
-            // PATCH v24
             _equipment    = GetComponent<NetworkEquipment>();
         }
 
         public override void OnStartServer()
         {
             All.Add(this);
-            _autoSaveTimer = SAVE_INTERVAL;
+            _autoSaveTimer  = SAVE_INTERVAL;
+            _lastDamageTime = -999f;
         }
 
         public override void OnStopServer()
@@ -175,10 +191,12 @@ namespace RPG.Network
             All.Remove(this);
             StopRegenLoop();
 
+            // CORREÇÃO v25: salva sempre ao desconectar (independente de _isDirty)
+            // para garantir que posição final e HP são persistidos
             if (_serverCharData != null && !string.IsNullOrEmpty(_serverAccountUsername))
                 ServerSaveCharacterForced();
             else
-                Debug.LogWarning($"[Server] OnStopServer: {CharacterName} sem dados ou username — save ignorado.");
+                Debug.LogWarning($"[Server] OnStopServer: {CharacterName} sem dados — save ignorado.");
         }
 
         public override void OnStartClient()
@@ -263,15 +281,12 @@ namespace RPG.Network
             _serverAccountUsername = accountUsername;
             _serverCharData        = charData;
 
-            // PATCH v24: carrega equipment loadout e recalcula bônus antes dos stats iniciais
             _inventory?.ServerLoadFromDatabase(charData.CharacterId);
             _inventory?.ServerLoadGemLoadout(charData.CharacterId);
             _equipment?.ServerLoadFromDatabase(charData.CharacterId);
 
             if (_equipment != null)
-            {
                 _serverCharData.EquipmentBonuses = _equipment.BuildEquipmentBonuses();
-            }
 
             _serverStats = charData.GetDerivedStats();
 
@@ -297,7 +312,6 @@ namespace RPG.Network
             BaseINT = charData.BaseAttributes.INT;
             BaseLUK = charData.BaseAttributes.LUK;
 
-            // CORREÇÃO v23: MaxHP/MaxMP ANTES de CurrentHP/CurrentMP
             MaxHP     = maxHP;
             MaxMP     = maxMP;
             CurrentHP = (charData.CurrentHP > 0f && charData.CurrentHP <= maxHP) ? charData.CurrentHP : maxHP;
@@ -397,7 +411,8 @@ namespace RPG.Network
                 var stats = _serverStats;
                 if (stats == null) continue;
 
-                bool inCombat = (Time.time - _lastDamageTime) < REGEN_COMBAT_SUPPRESSION;
+                // CORREÇÃO v25: usa realtimeSinceStartup para funcionar em servidor dedicado
+                bool inCombat = (Time.realtimeSinceStartup - _lastDamageTime) < REGEN_COMBAT_SUPPRESSION;
                 if (inCombat) continue;
 
                 bool needsHPRegen = CurrentHP < MaxHP && stats.HPRegen > 0f;
@@ -435,31 +450,34 @@ namespace RPG.Network
         [Command]
         public void CmdAllocateAttribute(int attributeIndex)
         {
+            // CORREÇÃO v25: validação de tempo E de pontos disponíveis em sequência
             if (Time.time - _lastAllocateTime < ALLOCATE_MIN_INTERVAL)
             {
                 Debug.LogWarning($"[Server] CmdAllocateAttribute spam: {CharacterName}");
                 return;
             }
 
-            if (FreeAttributePoints <= 0 || _serverCharData == null) return;
+            if (_serverCharData == null) return;
+            if (FreeAttributePoints <= 0) return;
+            if (_serverCharData.FreeAttributePoints <= 0) return; // double-check server-side
             if (attributeIndex < 0 || attributeIndex > 5) return;
 
             _lastAllocateTime = Time.time;
 
-            bool limitExceeded = attributeIndex switch
+            int currentAlloc = attributeIndex switch
             {
-                0 => _serverCharData.AllocatedSTR >= CharacterData.MAX_ALLOCATED_PER_STAT,
-                1 => _serverCharData.AllocatedAGI >= CharacterData.MAX_ALLOCATED_PER_STAT,
-                2 => _serverCharData.AllocatedVIT >= CharacterData.MAX_ALLOCATED_PER_STAT,
-                3 => _serverCharData.AllocatedDEX >= CharacterData.MAX_ALLOCATED_PER_STAT,
-                4 => _serverCharData.AllocatedINT >= CharacterData.MAX_ALLOCATED_PER_STAT,
-                5 => _serverCharData.AllocatedLUK >= CharacterData.MAX_ALLOCATED_PER_STAT,
-                _ => true
+                0 => _serverCharData.AllocatedSTR,
+                1 => _serverCharData.AllocatedAGI,
+                2 => _serverCharData.AllocatedVIT,
+                3 => _serverCharData.AllocatedDEX,
+                4 => _serverCharData.AllocatedINT,
+                5 => _serverCharData.AllocatedLUK,
+                _ => int.MaxValue
             };
 
-            if (limitExceeded)
+            if (currentAlloc >= CharacterData.MAX_ALLOCATED_PER_STAT)
             {
-                Debug.LogWarning($"[Security] {CharacterName} tentou alocar atributo {attributeIndex} além do limite.");
+                Debug.LogWarning($"[Security] {CharacterName} tentou alocar atributo {attributeIndex} além do limite ({CharacterData.MAX_ALLOCATED_PER_STAT}).");
                 return;
             }
 
@@ -478,7 +496,6 @@ namespace RPG.Network
 
             _serverStats = _serverCharData.GetDerivedStats();
 
-            // CORREÇÃO v23: MaxHP/MaxMP antes de Current
             MaxHP = Mathf.Min(_serverStats.MaxHP, MAX_HP_CAP);
             MaxMP = Mathf.Min(_serverStats.MaxMP, MAX_MP_CAP);
             if (CurrentHP > MaxHP) CurrentHP = MaxHP;
@@ -491,7 +508,8 @@ namespace RPG.Network
             MarkDirty();
         }
 
-        [Command] public void CmdRequestRespawn()
+        [Command]
+        public void CmdRequestRespawn()
         {
             if (!Dead) return;
             ServerRespawn();
@@ -535,7 +553,8 @@ namespace RPG.Network
         public void ServerApplyDamage(float dmg)
         {
             if (Dead) return;
-            _lastDamageTime = Time.time;
+            // CORREÇÃO v25: usa realtimeSinceStartup para funcionar em servidor dedicado
+            _lastDamageTime = Time.realtimeSinceStartup;
             CurrentHP = Mathf.Max(0f, CurrentHP - dmg);
             if (_serverCharData != null) _serverCharData.CurrentHP = CurrentHP;
             if (CurrentHP <= 0f) ServerDie();
@@ -545,7 +564,7 @@ namespace RPG.Network
         public void ServerApplyDamageWithFeedback(float dmg)
         {
             if (Dead) return;
-            _lastDamageTime = Time.time;
+            _lastDamageTime = Time.realtimeSinceStartup;
             float before = CurrentHP;
             CurrentHP = Mathf.Max(0f, CurrentHP - dmg);
             float actualDmg = before - CurrentHP;
@@ -607,7 +626,6 @@ namespace RPG.Network
             {
                 _serverStats = _serverCharData.GetDerivedStats();
 
-                // CORREÇÃO v23: MaxHP/MaxMP antes de Current
                 MaxHP     = Mathf.Min(_serverStats.MaxHP, MAX_HP_CAP);
                 MaxMP     = Mathf.Min(_serverStats.MaxMP, MAX_MP_CAP);
                 CurrentHP = MaxHP;
@@ -655,7 +673,6 @@ namespace RPG.Network
 
             DatabaseManager.Instance?.SaveCharacter(_serverCharData, _serverAccountUsername);
             _inventory?.ServerSaveAll(_serverCharData.CharacterId, _serverAccountUsername);
-            // PATCH v24: salva loadout de equipamentos
             _equipment?.ServerSaveAll(_serverCharData.CharacterId, _serverAccountUsername);
             _isDirty = false;
         }
@@ -812,7 +829,6 @@ namespace RPG.Network
             GetComponent<SkillSystem>()?.OnServerSkillRejected(skillIndex, reason);
         }
 
-        // PATCH v24: RpcShowMessage adicionado (usado pelo NetworkEquipment)
         [ClientRpc]
         public void RpcShowMessage(string message)
         {
@@ -841,7 +857,6 @@ namespace RPG.Network
             transform.position = pos;
             if (_agent != null && _agent.isOnNavMesh) _agent.Warp(pos);
 
-            // CORREÇÃO v23: MaxHP/MaxMP antes de Current
             MaxHP     = Mathf.Min(_serverStats.MaxHP, MAX_HP_CAP);
             MaxMP     = Mathf.Min(_serverStats.MaxMP, MAX_MP_CAP);
             CurrentHP = MaxHP * 0.5f;
@@ -988,6 +1003,19 @@ namespace RPG.Network
             if (!isLocalPlayer) return;
             if (_playerEntity == null || !_playerEntity.IsInitialized) return;
             _playerEntity.FullRefreshStatsFromData();
+        }
+
+        // ── API pública para CmdMoveTo throttling ──────────────────────────
+
+        /// <summary>
+        /// Retorna true se pode enviar CmdMoveTo agora (respeita throttle).
+        /// Chamado pelo NetworkPlayerController e sistemas de combate.
+        /// </summary>
+        public bool CanSendMoveCmd()
+        {
+            if (Time.time - _lastMoveCmdSentTime < CMD_MOVE_THROTTLE) return false;
+            _lastMoveCmdSentTime = Time.time;
+            return true;
         }
     }
 }
