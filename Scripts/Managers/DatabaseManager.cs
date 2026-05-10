@@ -4,6 +4,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Threading;
 using RPG.Data;
+using RPG.Network;
 
 #if UNITY_SERVER
 using SQLite;
@@ -126,6 +127,25 @@ namespace RPG.Managers
         [Column("slot_r")] public string SlotR { get; set; } = "";
     }
 
+    /// <summary>
+    /// NOVO: Tabela de loadout de equipamentos (7 slots).
+    /// Criada automaticamente pelo CreateTable no Init.
+    /// </summary>
+    [Table("equipment_loadout")]
+    public class EquipmentLoadoutRow
+    {
+        [PrimaryKey][Column("character_id")]
+        public string CharacterId { get; set; }
+
+        [Column("weapon")] public string Weapon { get; set; } = "";
+        [Column("shield")] public string Shield { get; set; } = "";
+        [Column("helmet")] public string Helmet { get; set; } = "";
+        [Column("chest")]  public string Chest  { get; set; } = "";
+        [Column("legs")]   public string Legs   { get; set; } = "";
+        [Column("boots")]  public string Boots  { get; set; } = "";
+        [Column("gloves")] public string Gloves { get; set; } = "";
+    }
+
     [Table("economy_log")]
     public class EconomyLogRow
     {
@@ -147,38 +167,38 @@ namespace RPG.Managers
 
 #else
     // ── Stubs das tabelas para o cliente compilar sem SQLite ──────────────
-    public class AccountRow  { public string Username { get; set; } public string PasswordHash { get; set; } public string CreatedAt { get; set; } public string LastLogin { get; set; } }
-    public class CharacterRow { public string CharacterId { get; set; } public string Username { get; set; } public string CharacterName { get; set; } public int Race { get; set; } public int Level { get; set; } = 1; public long Experience { get; set; } = 0; public long ExpToNext { get; set; } = 100; public float CurrentHP { get; set; } = 100f; public float CurrentMP { get; set; } = 50f; public float PosX { get; set; } = 0f; public float PosY { get; set; } = 1f; public float PosZ { get; set; } = 0f; public string CurrentMap { get; set; } = "World_01"; public int FreePoints { get; set; } = 0; public int AllocSTR { get; set; } = 0; public int AllocAGI { get; set; } = 0; public int AllocVIT { get; set; } = 0; public int AllocDEX { get; set; } = 0; public int AllocINT { get; set; } = 0; public int AllocLUK { get; set; } = 0; public int BaseSTR { get; set; } = 10; public int BaseAGI { get; set; } = 10; public int BaseVIT { get; set; } = 10; public int BaseDEX { get; set; } = 10; public int BaseINT { get; set; } = 10; public int BaseLUK { get; set; } = 10; }
-    public class InventoryRow { public int Id { get; set; } public string CharacterId { get; set; } public string ItemId { get; set; } public int Quantity { get; set; } = 1; public int SlotIndex { get; set; } = -1; public bool IsEquipped { get; set; } = false; }
-    public class GemLoadoutRow { public string CharacterId { get; set; } public string SlotQ { get; set; } = ""; public string SlotW { get; set; } = ""; public string SlotE { get; set; } = ""; public string SlotR { get; set; } = ""; }
-    public class EconomyLogRow { public int Id { get; set; } public string CharacterId { get; set; } public string EventType { get; set; } public float Value { get; set; } public string Timestamp { get; set; } }
+    public class AccountRow        { public string Username { get; set; } public string PasswordHash { get; set; } public string CreatedAt { get; set; } public string LastLogin { get; set; } }
+    public class CharacterRow      { public string CharacterId { get; set; } public string Username { get; set; } public string CharacterName { get; set; } public int Race { get; set; } public int Level { get; set; } = 1; public long Experience { get; set; } = 0; public long ExpToNext { get; set; } = 100; public float CurrentHP { get; set; } = 100f; public float CurrentMP { get; set; } = 50f; public float PosX { get; set; } = 0f; public float PosY { get; set; } = 1f; public float PosZ { get; set; } = 0f; public string CurrentMap { get; set; } = "World_01"; public int FreePoints { get; set; } = 0; public int AllocSTR { get; set; } = 0; public int AllocAGI { get; set; } = 0; public int AllocVIT { get; set; } = 0; public int AllocDEX { get; set; } = 0; public int AllocINT { get; set; } = 0; public int AllocLUK { get; set; } = 0; public int BaseSTR { get; set; } = 10; public int BaseAGI { get; set; } = 10; public int BaseVIT { get; set; } = 10; public int BaseDEX { get; set; } = 10; public int BaseINT { get; set; } = 10; public int BaseLUK { get; set; } = 10; }
+    public class InventoryRow      { public int Id { get; set; } public string CharacterId { get; set; } public string ItemId { get; set; } public int Quantity { get; set; } = 1; public int SlotIndex { get; set; } = -1; public bool IsEquipped { get; set; } = false; }
+    public class GemLoadoutRow     { public string CharacterId { get; set; } public string SlotQ { get; set; } = ""; public string SlotW { get; set; } = ""; public string SlotE { get; set; } = ""; public string SlotR { get; set; } = ""; }
+    public class EquipmentLoadoutRow { public string CharacterId { get; set; } public string Weapon { get; set; } = ""; public string Shield { get; set; } = ""; public string Helmet { get; set; } = ""; public string Chest { get; set; } = ""; public string Legs { get; set; } = ""; public string Boots { get; set; } = ""; public string Gloves { get; set; } = ""; }
+    public class EconomyLogRow     { public int Id { get; set; } public string CharacterId { get; set; } public string EventType { get; set; } public float Value { get; set; } public string Timestamp { get; set; } }
 #endif
 
     // ══════════════════════════════════════════════════════════════════════
-    // DatabaseManager v10
+    // DatabaseManager v11
     // ══════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// DatabaseManager v10
+    /// DatabaseManager v11
     ///
-    /// CORREÇÕES v10:
+    /// CORREÇÕES v11:
     ///
-    ///   BUG CRÍTICO — SaveCharacter não persistia BaseAttributes:
-    ///     A query UPDATE não incluía base_str, base_agi, base_vit, base_dex,
-    ///     base_int, base_luk. Após um restart do servidor, os atributos base
-    ///     dos personagens voltavam para os defaults do banco (10 cada).
-    ///     SOLUÇÃO: Campos base_* adicionados ao UPDATE query em SaveCharacter.
+    ///   NOVO — Tabela equipment_loadout adicionada:
+    ///     Persiste os 7 slots de equipamento (Weapon, Shield, Helmet, Chest,
+    ///     Legs, Boots, Gloves) por personagem.
+    ///     Métodos: LoadEquipmentLoadout() e SaveEquipmentLoadout().
+    ///     Chamados pelo NetworkEquipment.ServerLoadFromDatabase() e ServerSaveAll().
     ///
-    ///   SEGURANÇA — TryLoginWithHash legado removido da API pública:
-    ///     O método sem nonce era vulnerável a replay attacks. Substituído por
-    ///     TryLoginLegacy que loga aviso e recusa o acesso, orientando ao
-    ///     fluxo correto (TryLoginWithSignedHash).
+    ///   CRÍTICO — Tabela criada em InitializeDatabase():
+    ///     _db.CreateTable<EquipmentLoadoutRow>() adicionado ao bloco de init.
+    ///     Bancos antigos recebem a nova tabela automaticamente (SQLite-net é
+    ///     não-destrutivo com CreateTable).
     ///
-    ///   MELHORIA — LoadInventory retorna apenas itens não-equipped por padrão:
-    ///     Adicionado parâmetro includeEquipped para controle explícito.
-    ///     Itens equipados como gem loadout são carregados via LoadGemLoadout.
-    ///
-    ///   Todas as correções v9 mantidas (WAL, write thread, pipeline de hash).
+    ///   Todas as correções v10 mantidas:
+    ///     - SaveCharacter inclui base_str/agi/vit/dex/int/luk.
+    ///     - TryLoginWithHash legado recusado com [Obsolete].
+    ///     - WAL, write thread, pipeline de hash.
     /// </summary>
     public class DatabaseManager : MonoBehaviour
     {
@@ -249,6 +269,7 @@ namespace RPG.Managers
                 _db.CreateTable<CharacterRow>();
                 _db.CreateTable<InventoryRow>();
                 _db.CreateTable<GemLoadoutRow>();
+                _db.CreateTable<EquipmentLoadoutRow>(); // NOVO v11
                 _db.CreateTable<EconomyLogRow>();
 
                 Debug.Log("[DatabaseManager] Banco inicializado com sucesso.");
@@ -325,7 +346,6 @@ namespace RPG.Managers
             try
             {
                 string storedHash = GameManager.ServerHashForStorage(clientPasswordHash);
-
                 lock (_dbLock)
                 {
                     _db.Insert(new AccountRow
@@ -394,16 +414,11 @@ namespace RPG.Managers
             }
         }
 
-        /// <summary>
-        /// CORREÇÃO v10: método legado sem nonce recusado com log de aviso.
-        /// Use TryLoginWithSignedHash para autenticação segura.
-        /// Mantido apenas para evitar erros de compilação em código antigo.
-        /// </summary>
         [Obsolete("Use TryLoginWithSignedHash — vulnerável a replay attacks sem nonce.")]
         public AccountData TryLoginWithHash(string username, string clientPasswordHash)
         {
             Debug.LogError($"[DB] TryLoginWithHash LEGADO chamado para '{username}'! " +
-                           "Este método é inseguro. Use TryLoginWithSignedHash.");
+                           "Use TryLoginWithSignedHash.");
             return null;
         }
 
@@ -548,10 +563,6 @@ namespace RPG.Managers
             catch (Exception e) { Debug.LogError($"[DB] TryCreateCharacter: {e.Message}"); return "Erro interno."; }
         }
 
-        /// <summary>
-        /// CORREÇÃO v10: UPDATE agora inclui base_str/agi/vit/dex/int/luk.
-        /// Antes os atributos base eram perdidos após restart do servidor.
-        /// </summary>
         public void SaveCharacter(CharacterData ch, string username)
         {
             if (ch == null || string.IsNullOrWhiteSpace(ch.CharacterId)) return;
@@ -572,7 +583,6 @@ namespace RPG.Managers
             int    aDEX    = ch.AllocatedDEX;
             int    aINT    = ch.AllocatedINT;
             int    aLUK    = ch.AllocatedLUK;
-            // CORREÇÃO v10: captura base attributes para persistir
             int    bSTR    = ch.BaseAttributes?.STR ?? 10;
             int    bAGI    = ch.BaseAttributes?.AGI ?? 10;
             int    bVIT    = ch.BaseAttributes?.VIT ?? 10;
@@ -586,7 +596,6 @@ namespace RPG.Managers
                 {
                     lock (_dbLock)
                     {
-                        // CORREÇÃO v10: query expandida com base_str/agi/vit/dex/int/luk
                         _db.Execute(@"
                             UPDATE characters SET
                                 level       = ?, experience  = ?, exp_to_next = ?,
@@ -612,10 +621,6 @@ namespace RPG.Managers
         // INVENTÁRIO
         // ══════════════════════════════════════════════════════════════════
 
-        /// <summary>
-        /// Carrega inventário. Por padrão retorna todos os itens (is_equipped = false).
-        /// Itens equipados como gem loadout são gerenciados separadamente.
-        /// </summary>
         public List<InventoryRow> LoadInventory(string characterId)
         {
             try
@@ -733,6 +738,84 @@ namespace RPG.Managers
         }
 
         // ══════════════════════════════════════════════════════════════════
+        // EQUIPMENT LOADOUT — NOVO v11
+        // ══════════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// Carrega o loadout de equipamentos de um personagem.
+        /// Retorna um EquipmentLoadout vazio (todos os campos "") se não houver registro.
+        /// </summary>
+        public EquipmentLoadout LoadEquipmentLoadout(string characterId)
+        {
+            if (string.IsNullOrWhiteSpace(characterId)) return new EquipmentLoadout();
+            try
+            {
+                EquipmentLoadoutRow row;
+                lock (_dbLock)
+                    row = _db.Find<EquipmentLoadoutRow>(characterId);
+
+                if (row == null) return new EquipmentLoadout { CharacterId = characterId };
+
+                return new EquipmentLoadout
+                {
+                    CharacterId = row.CharacterId,
+                    Weapon      = row.Weapon ?? "",
+                    Shield      = row.Shield ?? "",
+                    Helmet      = row.Helmet ?? "",
+                    Chest       = row.Chest  ?? "",
+                    Legs        = row.Legs   ?? "",
+                    Boots       = row.Boots  ?? "",
+                    Gloves      = row.Gloves ?? ""
+                };
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[DB] LoadEquipmentLoadout: {e.Message}");
+                return new EquipmentLoadout { CharacterId = characterId };
+            }
+        }
+
+        /// <summary>
+        /// Salva o loadout de equipamentos de forma assíncrona (write thread).
+        /// Usa InsertOrReplace — cria ou atualiza o registro automaticamente.
+        /// </summary>
+        public void SaveEquipmentLoadout(string characterId, EquipmentLoadout loadout)
+        {
+            if (string.IsNullOrWhiteSpace(characterId)) return;
+
+            string charId  = characterId;
+            string weapon  = loadout.Weapon ?? "";
+            string shield  = loadout.Shield ?? "";
+            string helmet  = loadout.Helmet ?? "";
+            string chest   = loadout.Chest  ?? "";
+            string legs    = loadout.Legs   ?? "";
+            string boots   = loadout.Boots  ?? "";
+            string gloves  = loadout.Gloves ?? "";
+
+            EnqueueWrite(() =>
+            {
+                try
+                {
+                    lock (_dbLock)
+                    {
+                        _db.InsertOrReplace(new EquipmentLoadoutRow
+                        {
+                            CharacterId = charId,
+                            Weapon      = weapon,
+                            Shield      = shield,
+                            Helmet      = helmet,
+                            Chest       = chest,
+                            Legs        = legs,
+                            Boots       = boots,
+                            Gloves      = gloves
+                        });
+                    }
+                }
+                catch (Exception e) { Debug.LogError($"[DB] SaveEquipmentLoadout: {e.Message}"); }
+            });
+        }
+
+        // ══════════════════════════════════════════════════════════════════
         // LOG DE ECONOMIA
         // ══════════════════════════════════════════════════════════════════
 
@@ -808,6 +891,8 @@ namespace RPG.Managers
         public void                AddItem(string id, string item, int qty = 1, int slot = -1)                { }
         public PowerGemLoadout     LoadGemLoadout(string id)                                                   => new PowerGemLoadout();
         public void                SaveGemLoadout(string id, PowerGemLoadout l)                               { }
+        public EquipmentLoadout    LoadEquipmentLoadout(string id)                                             => new EquipmentLoadout();
+        public void                SaveEquipmentLoadout(string id, EquipmentLoadout l)                        { }
         public void                LogEconomy(string id, string ev, float v)                                  { }
 #endif
     }
