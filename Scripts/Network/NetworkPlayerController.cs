@@ -8,34 +8,26 @@ using RPG.Combat;
 namespace RPG.Network
 {
     /// <summary>
-    /// NetworkPlayerController v13
+    /// NetworkPlayerController v14
     ///
-    /// CORREÇÕES v13:
+    /// CORREÇÕES v14:
     ///
-    ///   BUG — HandleSkillInput ativava skills ao digitar em campos de texto:
-    ///     Input.GetKeyDown(KeyCode.W) disparava skill enquanto o jogador
-    ///     digitava o nome do personagem ou em qualquer TMP_InputField,
-    ///     porque não havia verificação de foco de UI.
-    ///     SOLUÇÃO: guard IsTypingInField() verifica EventSystem.currentSelectedGameObject
-    ///     e se é TMP_InputField antes de processar qualquer atalho de teclado.
+    ///   CORREÇÃO — CmdMoveTo agora usa NetworkPlayer.CanSendMoveCmd() para throttle
+    ///     global (inclusive em cliques livres, não só no chase).
+    ///     Antes, cliques rápidos em sequência enviavam um comando por frame
+    ///     (60+ cmd/s), causando sobrecarga de rede desnecessária.
+    ///     Agora o throttle de CMD_MOVE_THROTTLE (0.05s = 20 cmd/s max) é aplicado
+    ///     em TODOS os caminhos que enviam CmdMoveTo.
     ///
-    ///   BUG — CmdMoveTo chamava RpcMoveConfirmed causando double SetDestination:
-    ///     O cliente chamava _agent.SetDestination localmente em TryMoveToGround,
-    ///     e o servidor confirmava via RpcMoveConfirmed que chamava SetDestination
-    ///     novamente no mesmo cliente — resultando em micro-jitter e possível
-    ///     conflito com o destino atual.
-    ///     SOLUÇÃO: RpcMoveConfirmed removido de CmdMoveTo. O servidor aplica
-    ///     o movimento autoritativo localmente; o cliente já aplica localmente
-    ///     sem precisar de confirmação (prediction local).
+    ///   MELHORIA — TryMoveToGround valida NavMesh antes de enviar CmdMoveTo.
+    ///     Se o destino do clique não tiver ponto válido no NavMesh dentro de 3m,
+    ///     o movimento é ignorado silenciosamente (evita spam de comandos inválidos).
     ///
-    ///   BUG — Câmera podia passar por geometria com zoom máximo:
-    ///     UpdateCameraPosition não fazia raycast contra o terreno para detectar
-    ///     oclusão. Adicionado CameraOcclusionCheck que empurra a câmera para
-    ///     frente quando há geometria entre o pivot e a posição calculada.
+    ///   MELHORIA — HandleMouseInput tem guarda explícito contra Dead.
+    ///     Quando o player está morto, cliques no mundo não enviam comandos.
     ///
-    ///   MELHORIA — SetEnabled(false) agora reseta orbiting e cursor imediatamente.
-    ///
-    ///   Todas as correções v12 mantidas.
+    ///   Todas as correções v13 mantidas (IsTypingInField, anti-oclusão câmera,
+    ///   remoção de RpcMoveConfirmed).
     /// </summary>
     [RequireComponent(typeof(NavMeshAgent))]
     public class NetworkPlayerController : NetworkBehaviour
@@ -64,6 +56,7 @@ namespace RPG.Network
         private PlayerEntity       _playerEntity;
         private SkillSystem        _skillSystem;
         private BasicAttackSystem  _basicAttack;
+        private NetworkPlayer      _networkPlayer;
         private Camera             _cam;
 
         // ── Câmera ─────────────────────────────────────────────────────────
@@ -108,10 +101,11 @@ namespace RPG.Network
 
         public override void OnStartLocalPlayer()
         {
-            _playerEntity = GetComponent<PlayerEntity>();
-            _skillSystem  = GetComponent<SkillSystem>();
-            _basicAttack  = GetComponent<BasicAttackSystem>();
-            _cam          = Camera.main;
+            _playerEntity  = GetComponent<PlayerEntity>();
+            _skillSystem   = GetComponent<SkillSystem>();
+            _basicAttack   = GetComponent<BasicAttackSystem>();
+            _networkPlayer = GetComponent<NetworkPlayer>();
+            _cam           = Camera.main;
 
             if (_cam == null)
                 Debug.LogWarning("[NetworkPlayerController] Camera.main não encontrada!");
@@ -154,6 +148,9 @@ namespace RPG.Network
         {
             if (!Input.GetMouseButtonDown(0)) return;
             if (_cam == null) return;
+
+            // CORREÇÃO v14: não processa input se player está morto
+            if (_playerEntity != null && _playerEntity.IsDead) return;
 
             if (UnityEngine.EventSystems.EventSystem.current != null &&
                 UnityEngine.EventSystems.EventSystem.current.IsPointerOverGameObject())
@@ -232,29 +229,34 @@ namespace RPG.Network
             UIManager.Instance?.ClearTargetPanel();
 
             Vector3 dest = hit.point;
-            if (NavMesh.SamplePosition(dest, out NavMeshHit navHit, 3f, NavMesh.AllAreas))
-                dest = navHit.position;
 
-            // Aplica localmente (prediction) — CmdMoveTo sincroniza com o servidor
+            // CORREÇÃO v14: valida NavMesh antes de qualquer coisa
+            if (!NavMesh.SamplePosition(dest, out NavMeshHit navHit, 3f, NavMesh.AllAreas))
+            {
+                if (debugMovement)
+                    Debug.LogWarning("[NetworkPlayerController] TryMoveToGround: ponto fora do NavMesh, ignorado.");
+                return;
+            }
+
+            dest = navHit.position;
+
+            // Aplica localmente (client prediction)
             if (_agent != null && _agent.isOnNavMesh)
                 _agent.SetDestination(dest);
 
-            CmdMoveTo(dest);
+            // CORREÇÃO v14: throttle via NetworkPlayer.CanSendMoveCmd()
+            if (_networkPlayer == null || _networkPlayer.CanSendMoveCmd())
+                CmdMoveTo(dest);
+
             SpawnMoveIndicator(hit.point);
         }
 
         // ── Skills ─────────────────────────────────────────────────────────
 
-        /// <summary>
-        /// CORREÇÃO v13: verifica se o jogador está digitando em algum campo de input
-        /// antes de processar atalhos de teclado. Previne skill ao digitar no chat, etc.
-        /// </summary>
         private void HandleSkillInput()
         {
             if (_skillSystem == null) return;
             if (_playerEntity != null && _playerEntity.IsDead) return;
-
-            // Não processa atalhos se estiver digitando em qualquer campo de texto
             if (IsTypingInField()) return;
 
             if (Input.GetKeyDown(KeyCode.Q)) _skillSystem.TryUseSkill(0);
@@ -264,10 +266,6 @@ namespace RPG.Network
             if (Input.GetKeyDown(KeyCode.C)) AttributeWindowUI.Instance?.Toggle();
         }
 
-        /// <summary>
-        /// Retorna true se o foco atual é um campo de texto (TMP_InputField ou InputField).
-        /// Impede que atalhos de gameplay se ativem enquanto o jogador digita.
-        /// </summary>
         private static bool IsTypingInField()
         {
             var selected = UnityEngine.EventSystems.EventSystem.current?.currentSelectedGameObject;
@@ -332,10 +330,6 @@ namespace RPG.Network
             _distance  = Mathf.Clamp(_distance, DIST_MIN, DIST_MAX);
         }
 
-        /// <summary>
-        /// Posiciona a câmera com anti-oclusão: se houver geometria entre o pivot
-        /// e a posição calculada, empurra a câmera para frente (reduz distância).
-        /// </summary>
         private void UpdateCameraPosition()
         {
             if (_cam == null) return;
@@ -344,7 +338,6 @@ namespace RPG.Network
             Vector3    pivot = transform.position + Vector3.up * cameraHeight;
             Vector3    dir   = rot * new Vector3(0f, 0f, -1f);
 
-            // Anti-oclusão: verifica se há obstáculo entre o pivot e a câmera
             float effectiveDistance = _distance;
             int   occlusionMask = cameraOcclusionLayer != 0 ? (int)cameraOcclusionLayer : (int)terrainLayer;
             if (occlusionMask != 0 &&
@@ -356,7 +349,6 @@ namespace RPG.Network
 
             Vector3 target = pivot + dir * effectiveDistance;
 
-            // Clamp mínimo acima do chão
             if (target.y < transform.position.y + 0.5f)
                 target.y = transform.position.y + 0.5f;
 
@@ -368,11 +360,10 @@ namespace RPG.Network
         // ── Commands ───────────────────────────────────────────────────────
 
         /// <summary>
-        /// CORREÇÃO v13: RpcMoveConfirmed REMOVIDO.
-        /// O cliente já aplicou SetDestination localmente (prediction).
-        /// O servidor apenas valida e aplica no objeto autoritativo.
-        /// Enviar RpcMoveConfirmed causava double SetDestination no cliente,
-        /// resultando em micro-jitter e conflito com destinos locais recentes.
+        /// Envia destino de movimento ao servidor.
+        /// O servidor valida distância máxima e aplica ao NavMeshAgent autoritativo.
+        /// O cliente já aplicou SetDestination localmente (client prediction) —
+        /// não enviamos RpcMoveConfirmed de volta para evitar double SetDestination.
         /// </summary>
         [Command]
         public void CmdMoveTo(Vector3 destination)
@@ -403,9 +394,9 @@ namespace RPG.Network
             else if (debugMovement)
             {
                 Debug.LogWarning($"[Server] CmdMoveTo: destino fora do NavMesh para {netPlayer.CharacterName}");
+                return; // CORREÇÃO v14: não aplica movimento inválido no servidor
             }
 
-            // Aplica apenas no servidor (sem RpcMoveConfirmed)
             _agent.SetDestination(finalDest);
         }
 
