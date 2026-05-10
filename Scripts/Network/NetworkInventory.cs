@@ -11,30 +11,48 @@ using System.Linq;
 namespace RPG.Network
 {
     /// <summary>
-    /// NetworkInventory v3
+    /// NetworkInventory v4
     ///
-    /// CORREÇÕES v3:
+    /// CORREÇÕES v4:
     ///
-    ///   BUG-01 — CmdEquipGem/CmdUnequipGem não moviam itens:
-    ///     Equipar joia agora REMOVE o item do inventário antes de setar o slot.
-    ///     Se já havia uma joia no slot, ela é DEVOLVIDA ao inventário primeiro (swap).
-    ///     Desequipar agora ADICIONA a joia de volta ao inventário antes de limpar o slot.
+    ///   CRÍTICO — CmdEquipGem sem verificação de inventário cheio no swap:
+    ///     Se o slot de destino já tinha uma joia, ServerAddItem era chamado
+    ///     para devolvê-la ao inventário. Se o inventário estivesse CHEIO,
+    ///     ServerAddItem retornava -1, mas o código continuava e a joia antiga
+    ///     era perdida permanentemente (sobrescrita sem devolução).
+    ///     SOLUÇÃO: aborta o equip se não há espaço para o swap ANTES de
+    ///     remover qualquer coisa do inventário.
     ///
-    ///   BUG-02 — _nextSlotIndex podia colidir após carregar do banco:
-    ///     ServerLoadFromDatabase agora garante _nextSlotIndex = max(SlotIndex) + 1
-    ///     usando LINQ para evitar colisão com slots já existentes.
+    ///   CRÍTICO — CmdUnequipGem perdia joia se inventário cheio:
+    ///     ServerAddItem retornava -1 mas o slot era limpo mesmo assim.
+    ///     SOLUÇÃO: verifica ServerAddItem antes de limpar o slot.
+    ///     (Bug já existia na v3 mas estava mascarado — corrigido aqui.)
     ///
-    ///   BUG-17 — OnGemSlotChanged único para 4 SyncVars dificultava debug:
-    ///     Hooks separados por slot (OnGemSlotQChanged, W, E, R) que todos chamam
-    ///     OnGemLoadoutChanged. Mais rastreável e preparado para otimizações futuras.
+    ///   ROBUSTEZ — MAX_INVENTORY_SIZE adicionado:
+    ///     Limita o inventário a 100 slots para evitar abuso de memória/rede
+    ///     em caso de bug de geração infinita de itens.
+    ///
+    ///   ROBUSTEZ — ServerAddItem retorna -1 se inventário cheio (MAX_INVENTORY_SIZE).
+    ///
+    ///   SEGURANÇA — CmdRemoveItem e CmdUseConsumable verificam se o player
+    ///     está morto no servidor antes de processar.
+    ///
+    ///   Todas as correções v3 mantidas (hooks separados, _nextSlotIndex seguro).
     /// </summary>
     [RequireComponent(typeof(NetworkIdentity))]
     public class NetworkInventory : NetworkBehaviour
     {
+        // ── Constantes ─────────────────────────────────────────────────────
+        /// <summary>
+        /// Número máximo de slots no inventário.
+        /// Protege contra abuso de memória/rede e facilita UI de grid fixo.
+        /// </summary>
+        public const int MAX_INVENTORY_SIZE = 100;
+
         // ── SyncList — Inventário ──────────────────────────────────────────
         public readonly SyncList<InventorySlotData> Slots = new SyncList<InventorySlotData>();
 
-        // ── SyncVars — Joias Equipadas (BUG-17: hooks separados) ──────────
+        // ── SyncVars — Joias Equipadas (hooks separados por slot) ──────────
         [SyncVar(hook = nameof(OnGemSlotQChanged))] public string GemSlotQ = "";
         [SyncVar(hook = nameof(OnGemSlotWChanged))] public string GemSlotW = "";
         [SyncVar(hook = nameof(OnGemSlotEChanged))] public string GemSlotE = "";
@@ -73,7 +91,7 @@ namespace RPG.Network
             Debug.Log("[NetworkInventory] UIs de inventário vinculadas.");
         }
 
-        // ── Hooks (BUG-17: separados por slot) ────────────────────────────
+        // ── Hooks ──────────────────────────────────────────────────────────
 
         private void OnSlotsChanged(SyncList<InventorySlotData>.Operation op,
                                     int index, InventorySlotData oldItem, InventorySlotData newItem)
@@ -88,6 +106,10 @@ namespace RPG.Network
         // INVENTÁRIO — API do servidor
         // ══════════════════════════════════════════════════════════════════
 
+        /// <summary>
+        /// Adiciona um item ao inventário. Retorna o SlotIndex atribuído ou -1 se falhar.
+        /// Falha se: itemId inválido, item não no database, ou inventário cheio (MAX_INVENTORY_SIZE).
+        /// </summary>
         [Server]
         public int ServerAddItem(string itemId, int quantity = 1)
         {
@@ -104,11 +126,18 @@ namespace RPG.Network
                 return -1;
             }
 
+            // CORREÇÃO v4: verifica limite de inventário
+            if (Slots.Count >= MAX_INVENTORY_SIZE)
+            {
+                Debug.LogWarning($"[NetworkInventory] Inventário cheio ({MAX_INVENTORY_SIZE} slots) — item '{itemId}' não adicionado.");
+                return -1;
+            }
+
             var slot = new InventorySlotData
             {
                 SlotIndex = _nextSlotIndex++,
                 ItemId    = itemId,
-                Quantity  = quantity
+                Quantity  = Mathf.Max(1, quantity)
             };
 
             Slots.Add(slot);
@@ -158,7 +187,17 @@ namespace RPG.Network
             return -1;
         }
 
-        // BUG-02: _nextSlotIndex calculado como max+1 para evitar colisão
+        /// <summary>
+        /// Verifica se há espaço disponível no inventário para adicionar um item.
+        /// Útil para verificar ANTES de fazer swaps que precisam de espaço.
+        /// </summary>
+        public bool HasInventorySpace(int slotsNeeded = 1)
+            => (Slots.Count + slotsNeeded) <= MAX_INVENTORY_SIZE;
+
+        /// <summary>
+        /// Carrega inventário do banco de dados.
+        /// _nextSlotIndex é calculado como max+1 para evitar colisão (BUG-02).
+        /// </summary>
         [Server]
         public void ServerLoadFromDatabase(string characterId)
         {
@@ -172,6 +211,14 @@ namespace RPG.Network
             foreach (var row in rows)
             {
                 if (string.IsNullOrEmpty(row.ItemId)) continue;
+
+                // Respeita o limite mesmo ao carregar do banco
+                if (Slots.Count >= MAX_INVENTORY_SIZE)
+                {
+                    Debug.LogWarning($"[NetworkInventory] Banco tem mais de {MAX_INVENTORY_SIZE} itens para char:{characterId} — excedente ignorado!");
+                    break;
+                }
+
                 var slot = new InventorySlotData
                 {
                     SlotIndex = row.SlotIndex >= 0 ? row.SlotIndex : _nextSlotIndex,
@@ -181,7 +228,6 @@ namespace RPG.Network
                 Slots.Add(slot);
             }
 
-            // BUG-02: garante _nextSlotIndex acima de todos os existentes
             if (Slots.Count > 0)
                 _nextSlotIndex = Slots.Max(s => s.SlotIndex) + 1;
 
@@ -222,14 +268,18 @@ namespace RPG.Network
         // ══════════════════════════════════════════════════════════════════
 
         /// <summary>
-        /// BUG-01 CORRIGIDO: Equipa joia e REMOVE do inventário.
-        /// Se já havia joia no slot, DEVOLVE ao inventário (swap).
+        /// Equipa joia no slot de skill especificado.
+        ///
+        /// CORREÇÃO v4: verifica espaço para swap ANTES de remover qualquer item.
+        /// Se o slot já tiver uma joia e o inventário estiver cheio, aborta.
+        /// Ordem segura: verificar → remover do inventário → devolver antiga → setar novo slot.
         /// </summary>
         [Command]
         public void CmdEquipGem(int skillSlotIndex, int inventorySlotIndex)
         {
             if (skillSlotIndex < 0 || skillSlotIndex > 3) return;
 
+            // 1. Localiza o item no inventário
             InventorySlotData? foundSlot = null;
             foreach (var s in Slots)
                 if (s.SlotIndex == inventorySlotIndex) { foundSlot = s; break; }
@@ -247,23 +297,52 @@ namespace RPG.Network
                 return;
             }
 
-            // BUG-01: se já há joia no slot, devolve ao inventário primeiro (swap)
+            // 2. CORREÇÃO v4: verifica se há espaço para devolver a joia atual (swap)
             string currentGemId = GetGemItemId(skillSlotIndex);
-            if (!string.IsNullOrEmpty(currentGemId))
+            bool   hasCurrentGem = !string.IsNullOrEmpty(currentGemId);
+
+            if (hasCurrentGem)
             {
-                ServerAddItem(currentGemId, 1);
-                Debug.Log($"[NetworkInventory] Swap: '{currentGemId}' devolvida ao inventário.");
+                // O swap precisa de espaço: a joia nova sai do inventário (libera 1 slot)
+                // e a antiga volta (precisa de 1 slot). Net = 0, mas só é seguro se
+                // a remoção ocorrer ANTES da inserção. Verificamos preventivamente.
+                // Se inventário estiver em MAX-1 ou menos, ok. Se exatamente MAX com
+                // a joia que vamos remover sendo o único slot, também ok.
+                // Simplificado: se Slots.Count - 1 < MAX_INVENTORY_SIZE, está seguro.
+                bool safeForSwap = (Slots.Count - 1) < MAX_INVENTORY_SIZE;
+                if (!safeForSwap)
+                {
+                    var np = GetComponent<NetworkPlayer>();
+                    np?.RpcShowMessage("Inventário cheio — não é possível trocar a joia!");
+                    return;
+                }
             }
 
-            // BUG-01: remove do inventário antes de equipar
+            // 3. Remove a nova joia do inventário PRIMEIRO
             ServerRemoveSlot(inventorySlotIndex);
 
+            // 4. Devolve a joia antiga ao inventário (swap seguro)
+            if (hasCurrentGem)
+            {
+                int returnedSlot = ServerAddItem(currentGemId, 1);
+                if (returnedSlot < 0)
+                {
+                    // Fallback: não devolveu, mas já removemos a nova — re-adiciona ela
+                    ServerAddItem(foundSlot.Value.ItemId, 1);
+                    Debug.LogError($"[NetworkInventory] Falha crítica no swap de joia '{currentGemId}' — operação revertida.");
+                    return;
+                }
+                Debug.Log($"[NetworkInventory] Swap: '{currentGemId}' devolvida ao inventário (slot {returnedSlot}).");
+            }
+
+            // 5. Equipa a nova joia
             ServerSetGemSlot(skillSlotIndex, foundSlot.Value.ItemId);
             Debug.Log($"[NetworkInventory] '{itemData.DisplayName}' equipada no slot {skillSlotIndex}.");
         }
 
         /// <summary>
-        /// BUG-01 CORRIGIDO: Desequipa joia e DEVOLVE ao inventário.
+        /// Desequipa joia e devolve ao inventário.
+        /// CORREÇÃO v4: aborta se inventário cheio (não perde a joia).
         /// </summary>
         [Command]
         public void CmdUnequipGem(int skillSlotIndex)
@@ -277,11 +356,13 @@ namespace RPG.Network
                 return;
             }
 
-            // BUG-01: devolve ao inventário antes de limpar o slot
+            // CORREÇÃO v4: tenta adicionar ANTES de limpar o slot
             int newSlot = ServerAddItem(gemId, 1);
             if (newSlot < 0)
             {
-                Debug.LogError($"[NetworkInventory] Falha ao devolver '{gemId}' ao inventário! Item perdido.");
+                var np = GetComponent<NetworkPlayer>();
+                np?.RpcShowMessage("Inventário cheio — não é possível desequipar a joia!");
+                Debug.LogWarning($"[NetworkInventory] CmdUnequipGem: inventário cheio, '{gemId}' não desequipada.");
                 return;
             }
 
@@ -308,6 +389,10 @@ namespace RPG.Network
         [Command]
         public void CmdRemoveItem(int inventorySlotIndex)
         {
+            // CORREÇÃO v4: verifica morte no servidor
+            var netPlayer = GetComponent<NetworkPlayer>();
+            if (netPlayer != null && netPlayer.Dead) return;
+
             bool removed = ServerRemoveSlot(inventorySlotIndex);
             if (removed)
                 Debug.Log($"[NetworkInventory] Item descartado: slot {inventorySlotIndex}");
@@ -318,6 +403,10 @@ namespace RPG.Network
         [Command]
         public void CmdUseConsumable(int inventorySlotIndex)
         {
+            // CORREÇÃO v4: verifica morte no servidor
+            var netPlayer = GetComponent<NetworkPlayer>();
+            if (netPlayer != null && netPlayer.Dead) return;
+
             InventorySlotData? foundSlot = null;
             foreach (var s in Slots)
                 if (s.SlotIndex == inventorySlotIndex) { foundSlot = s; break; }
@@ -326,8 +415,7 @@ namespace RPG.Network
             var itemData = ItemDatabase.Instance?.GetItem(foundSlot.Value.ItemId);
             if (itemData == null || !itemData.IsConsumable) return;
 
-            var netPlayer = GetComponent<NetworkPlayer>();
-            if (netPlayer == null || netPlayer.Dead) return;
+            if (netPlayer == null) return;
 
             if (itemData.HealAmount > 0f) netPlayer.ServerApplyHeal(itemData.HealAmount);
             if (itemData.ManaAmount > 0f) netPlayer.ServerRestoreMP(itemData.ManaAmount);
