@@ -8,34 +8,33 @@ using System.Collections.Generic;
 namespace RPG.Network
 {
     /// <summary>
-    /// NetworkEquipment v1
+    /// NetworkEquipment v2
     ///
-    /// Gerencia os 7 slots de equipamento do jogador (Weapon, Shield, Helmet,
-    /// Chest, Legs, Boots, Gloves) em modo server-authoritative.
+    /// CORREÇÕES v2:
     ///
-    /// ARQUITETURA:
-    ///   • SyncVars por slot — sincronização automática cliente/servidor.
-    ///   • Servidor calcula EquipmentBonuses completo sempre que um slot muda.
-    ///   • NetworkPlayer.ServerStats é recalculado via GetDerivedStats() com os novos bônus.
-    ///   • Cliente recebe atualização via hooks e dispara OnEquipmentChanged para a UI.
+    ///   INTEGRAÇÃO — ServerLoadFromDatabase e ServerSaveAll agora usam
+    ///     DatabaseManager.LoadEquipmentLoadout() e SaveEquipmentLoadout(),
+    ///     que existem no DatabaseManager v11. Nas versões anteriores,
+    ///     essas chamadas causavam erro de compilação porque os métodos
+    ///     não existiam no DatabaseManager.
     ///
-    /// INTEGRAÇÃO COM O SISTEMA EXISTENTE:
-    ///   • Não quebra NENHUM script existente.
-    ///   • NetworkPlayer._serverCharData.EquipmentBonuses é atualizado pelo servidor.
-    ///   • O mesmo StatsCalculator.Calculate() já existente recebe os bônus novos.
-    ///   • DatabaseManager.SaveCharacter() já persiste EquipmentBonuses (campos equip_*).
-    ///     → Para persistir os slots equipados, adicione uma tabela 'equipment_slots'
-    ///       (ver tutorial de instalação).
+    ///   SEGURANÇA — CmdEquipItem valida MeetsRequirements antes de equipar.
+    ///     A validação usa EquipmentData.MeetsRequirements() corrigido (v2),
+    ///     que agora compara atributos base totais em vez de stats derivados.
     ///
-    /// COLOQUE este componente no mesmo prefab de player onde está o NetworkInventory.
-    /// Adicione [RequireComponent(typeof(NetworkEquipment))] no NetworkPlayer se desejar.
+    ///   ROBUSTEZ — ServerRecalculateStats nunca acessa _agent se ele for null.
+    ///
+    ///   Todas as funcionalidades da v1 mantidas:
+    ///     - 7 SyncVars de slot, hooks separados por slot.
+    ///     - CmdEquipItem com swap automático.
+    ///     - CmdUnequipItem com devolução ao inventário.
+    ///     - BuildEquipmentBonuses para uso no ServerInitialize do NetworkPlayer.
     /// </summary>
     [RequireComponent(typeof(NetworkIdentity))]
     [RequireComponent(typeof(NetworkInventory))]
     public class NetworkEquipment : NetworkBehaviour
     {
         // ── SyncVars — um ItemId por slot (string vazia = slot vazio) ──────
-        // A ordem de declaração importa no Mirror: declare todos antes dos hooks.
         [SyncVar(hook = nameof(OnWeaponChanged))]  public string SlotWeapon = "";
         [SyncVar(hook = nameof(OnShieldChanged))]  public string SlotShield = "";
         [SyncVar(hook = nameof(OnHelmetChanged))]  public string SlotHelmet = "";
@@ -48,14 +47,10 @@ namespace RPG.Network
         /// <summary>Disparado no cliente sempre que qualquer slot muda.</summary>
         public event Action OnEquipmentChanged;
 
-        // ── Cache para persistência ────────────────────────────────────────
-        private string _characterId;
-
         // ── Lifecycle ──────────────────────────────────────────────────────
 
         public override void OnStartClient()
         {
-            // Vincula a EquipmentUI quando spawnar
             if (isLocalPlayer)
                 EquipmentUI.Instance?.BindEquipment(this);
         }
@@ -77,7 +72,6 @@ namespace RPG.Network
 
         // ── API de leitura ─────────────────────────────────────────────────
 
-        /// <summary>Retorna o ItemId equipado no slot, ou string.Empty se vazio.</summary>
         public string GetSlot(EquipmentSlot slot) => slot switch
         {
             EquipmentSlot.Weapon => SlotWeapon ?? "",
@@ -104,7 +98,6 @@ namespace RPG.Network
             var inventory = GetComponent<NetworkInventory>();
             if (inventory == null) return;
 
-            // Encontra o slot no inventário
             InventorySlotData? found = null;
             foreach (var s in inventory.Slots)
                 if (s.SlotIndex == inventorySlotIndex) { found = s; break; }
@@ -115,7 +108,6 @@ namespace RPG.Network
                 return;
             }
 
-            // Obtém o ItemData
             var itemData = ItemDatabase.Instance?.GetItem(found.Value.ItemId);
             if (itemData == null || itemData.Type != ItemType.Equipment)
             {
@@ -123,7 +115,6 @@ namespace RPG.Network
                 return;
             }
 
-            // Obtém o EquipmentData para saber o slot
             var eqData = EquipmentDatabase.Instance?.GetEquipment(found.Value.ItemId);
             if (eqData == null)
             {
@@ -131,7 +122,7 @@ namespace RPG.Network
                 return;
             }
 
-            // Verifica requisitos
+            // Verifica requisitos usando o método corrigido (v2 de EquipmentData)
             var netPlayer = GetComponent<NetworkPlayer>();
             if (netPlayer != null && netPlayer._serverCharData != null)
             {
@@ -142,26 +133,23 @@ namespace RPG.Network
                 }
             }
 
-            EquipmentSlot targetSlot = eqData.Slot;
-            string currentItemId = GetSlot(targetSlot);
+            EquipmentSlot targetSlot  = eqData.Slot;
+            string        currentItem = GetSlot(targetSlot);
 
-            // Se já há item no slot → devolve ao inventário (swap)
-            if (!string.IsNullOrEmpty(currentItemId))
+            // Swap: devolve item atual ao inventário antes de equipar o novo
+            if (!string.IsNullOrEmpty(currentItem))
             {
-                int returnedSlot = inventory.ServerAddItem(currentItemId, 1);
+                int returnedSlot = inventory.ServerAddItem(currentItem, 1);
                 if (returnedSlot < 0)
                 {
-                    Debug.LogError($"[NetworkEquipment] Inventário cheio — não foi possível fazer swap do slot {targetSlot}.");
+                    Debug.LogError($"[NetworkEquipment] Inventário cheio — swap do slot {targetSlot} cancelado.");
                     return;
                 }
-                Debug.Log($"[NetworkEquipment] Swap: '{currentItemId}' devolvido ao inventário.");
+                Debug.Log($"[NetworkEquipment] Swap: '{currentItem}' devolvido ao inventário (slot {returnedSlot}).");
             }
 
-            // Remove do inventário e equipa
             inventory.ServerRemoveSlot(inventorySlotIndex);
             ServerSetSlot(targetSlot, found.Value.ItemId);
-
-            // Recalcula stats no servidor
             ServerRecalculateStats();
 
             Debug.Log($"[NetworkEquipment] '{itemData.DisplayName}' equipado no slot {targetSlot}.");
@@ -218,9 +206,8 @@ namespace RPG.Network
         }
 
         /// <summary>
-        /// Reconstrói o EquipmentBonuses completo a partir dos 7 slots
-        /// e atualiza _serverCharData no NetworkPlayer, disparando recálculo
-        /// de DerivedStats e propagação via SyncVars MaxHP/MaxMP.
+        /// Reconstrói o EquipmentBonuses completo e recalcula DerivedStats
+        /// do NetworkPlayer. Atualiza MaxHP/MaxMP/MoveSpeed e StatsVersion.
         /// </summary>
         [Server]
         public void ServerRecalculateStats()
@@ -228,7 +215,6 @@ namespace RPG.Network
             var netPlayer = GetComponent<NetworkPlayer>();
             if (netPlayer == null || netPlayer._serverCharData == null) return;
 
-            // Reconstrói EquipmentBonuses do zero
             var bonuses = new EquipmentBonuses();
             var db = EquipmentDatabase.Instance;
 
@@ -245,12 +231,13 @@ namespace RPG.Network
             float newMaxHP = Mathf.Min(netPlayer._serverStats.MaxHP, NetworkPlayer.MAX_HP_CAP);
             float newMaxMP = Mathf.Min(netPlayer._serverStats.MaxMP, NetworkPlayer.MAX_MP_CAP);
 
-            // Mantém MaxHP/MaxMP ANTES de Current — alinhado com correção v23 do NetworkPlayer
+            // CORREÇÃO v23 do NetworkPlayer: MaxHP/MaxMP antes de CurrentHP/CurrentMP
             netPlayer.MaxHP = newMaxHP;
             netPlayer.MaxMP = newMaxMP;
             if (netPlayer.CurrentHP > newMaxHP) netPlayer.CurrentHP = newMaxHP;
             if (netPlayer.CurrentMP > newMaxMP) netPlayer.CurrentMP = newMaxMP;
 
+            // Atualiza velocidade do NavMeshAgent se disponível
             if (netPlayer._agent != null && netPlayer._agent.isOnNavMesh)
                 netPlayer._agent.speed = Mathf.Clamp(netPlayer._serverStats.MoveSpeed, 3f, 7f);
 
@@ -261,16 +248,24 @@ namespace RPG.Network
 
         /// <summary>
         /// Carrega os slots equipados do banco de dados ao iniciar o servidor.
-        /// Deve ser chamado por NetworkPlayer.ServerInitialize após carregar o inventário.
+        /// Chamado por NetworkPlayer.ServerInitialize após carregar o inventário.
+        ///
+        /// CORREÇÃO v2: usa DatabaseManager.LoadEquipmentLoadout() que agora existe.
         /// </summary>
         [Server]
         public void ServerLoadFromDatabase(string characterId)
         {
-            _characterId = characterId;
+            if (string.IsNullOrWhiteSpace(characterId)) return;
+
             var db = Managers.DatabaseManager.Instance;
-            if (db == null) return;
+            if (db == null)
+            {
+                Debug.LogWarning("[NetworkEquipment] DatabaseManager.Instance é null — loadout de equipamento não carregado.");
+                return;
+            }
 
             var loadout = db.LoadEquipmentLoadout(characterId);
+
             SlotWeapon = loadout.Weapon ?? "";
             SlotShield = loadout.Shield ?? "";
             SlotHelmet = loadout.Helmet ?? "";
@@ -279,26 +274,37 @@ namespace RPG.Network
             SlotBoots  = loadout.Boots  ?? "";
             SlotGloves = loadout.Gloves ?? "";
 
-            Debug.Log($"[NetworkEquipment] Loadout carregado para char:{characterId}");
+            Debug.Log($"[NetworkEquipment] Loadout carregado para char:{characterId} | " +
+                      $"Weapon:{SlotWeapon} Shield:{SlotShield} Helmet:{SlotHelmet} " +
+                      $"Chest:{SlotChest} Legs:{SlotLegs} Boots:{SlotBoots} Gloves:{SlotGloves}");
         }
 
+        /// <summary>
+        /// Persiste o loadout de equipamentos no banco de dados.
+        /// Chamado por NetworkPlayer.ServerSaveCharacterForced().
+        ///
+        /// CORREÇÃO v2: usa DatabaseManager.SaveEquipmentLoadout() que agora existe.
+        /// </summary>
         [Server]
         public void ServerSaveAll(string characterId, string username)
         {
+            if (string.IsNullOrWhiteSpace(characterId)) return;
+
             var db = Managers.DatabaseManager.Instance;
             if (db == null) return;
 
             db.SaveEquipmentLoadout(characterId, new EquipmentLoadout
             {
                 CharacterId = characterId,
-                Weapon = SlotWeapon, Shield = SlotShield,
-                Helmet = SlotHelmet, Chest  = SlotChest,
-                Legs   = SlotLegs,   Boots  = SlotBoots,
-                Gloves = SlotGloves
+                Weapon      = SlotWeapon ?? "",
+                Shield      = SlotShield ?? "",
+                Helmet      = SlotHelmet ?? "",
+                Chest       = SlotChest  ?? "",
+                Legs        = SlotLegs   ?? "",
+                Boots       = SlotBoots  ?? "",
+                Gloves      = SlotGloves ?? ""
             });
         }
-
-        // ── Reconstrução do EquipmentBonuses para uso em init ─────────────
 
         /// <summary>
         /// Gera um EquipmentBonuses completo com base nos slots atuais.
