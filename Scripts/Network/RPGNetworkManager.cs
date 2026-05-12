@@ -9,27 +9,23 @@ using RPG.Data;
 namespace RPG.Network
 {
     /// <summary>
-    /// RPGNetworkManager v9
+    /// NetworkManager especializado para o RPG.
     ///
-    /// CORREÇÕES v9:
-    ///
-    ///   BUG-22 — RegisterSpawnablePrefabs chamada múltiplas vezes:
-    ///     Era chamada em Start(), OnStartServer(), OnStartClient() e
-    ///     OnServerSceneChanged() — 4 chamadas desnecessárias causando warnings.
-    ///     SOLUÇÃO: flag _prefabsRegistered garante registro apenas uma vez.
-    ///     OnServerSceneChanged mantém re-registro porque novos prefabs podem
-    ///     ser necessários em cenas diferentes (ex: dungeons com monstros únicos).
-    ///
-    ///   Todas as correções v8 mantidas:
-    ///     - Timeout de spawn pendente (30s).
-    ///     - Cancelamento de spawn ao desconectar.
-    ///     - Verificação de conn.isReady antes e depois de yield.
-    ///     - Proteção contra prefabs null.
+    /// Responsabilidades:
+    ///   - Inicializa ServerAuthManager e registra handlers.
+    ///   - Aguarda MsgClientSceneReady antes de spawnar o player (garante NavMesh pronto).
+    ///   - Mantém spawn points por raça.
+    ///   - Registra prefabs de monstro/itens uma única vez.
     /// </summary>
     public class RPGNetworkManager : NetworkManager
     {
         public static new RPGNetworkManager singleton =>
             NetworkManager.singleton as RPGNetworkManager;
+
+        private const float SPAWN_NAVMESH_RADIUS    = 15f;
+        private const float SPAWN_NAVMESH_TIMEOUT   = 5f;
+        private const float PENDING_SPAWN_TIMEOUT   = 30f;
+        private const float CLEANUP_PENDING_SPAWN_S = 5f;
 
         private static readonly Dictionary<CharacterRace, Vector3> RaceSpawnPoints = new()
         {
@@ -40,30 +36,27 @@ namespace RPG.Network
             { CharacterRace.Undead, new Vector3( -20f, 1f, -10f) },
         };
 
-        private const float SPAWN_NAVMESH_RADIUS  = 15f;
-        private const float PENDING_SPAWN_TIMEOUT = 30f;
-
         [Header("Spawnable Prefabs")]
-        [Tooltip("Todos os prefabs de monstro (precisam ter NetworkIdentity)")]
+        [Tooltip("Prefabs de monstros e itens (precisam ter NetworkIdentity).")]
         [SerializeField] private List<GameObject> spawnablePrefabs = new List<GameObject>();
-
-        private readonly Dictionary<int, PendingSpawn> _pendingSpawns  = new();
-        private readonly Dictionary<int, Coroutine>    _spawnCoroutines = new();
-
-        // BUG-22: flag para evitar re-registro desnecessário
-        private bool _prefabsRegistered = false;
-
-        private ServerAuthManager _authManager;
 
         private struct PendingSpawn
         {
             public NetworkConnectionToClient Conn;
-            public CharacterData            CharData;
-            public string                   AccountUsername;
-            public float                    ExpiresAt;
+            public CharacterData             CharData;
+            public string                    AccountUsername;
+            public float                     ExpiresAt;
         }
 
-        // ── Lifecycle ──────────────────────────────────────────────────────
+        private readonly Dictionary<int, PendingSpawn> _pendingSpawns   = new();
+        private readonly Dictionary<int, Coroutine>    _spawnCoroutines = new();
+
+        private bool              _prefabsRegistered;
+        private ServerAuthManager _authManager;
+
+        // ══════════════════════════════════════════════════════════════════
+        // Lifecycle
+        // ══════════════════════════════════════════════════════════════════
 
         public override void Start()
         {
@@ -75,6 +68,9 @@ namespace RPG.Network
         {
             base.OnStartServer();
 
+            if (playerPrefab == null)
+                Debug.LogError("[RPGNetworkManager] playerPrefab não configurado!");
+
             _authManager = GetComponent<ServerAuthManager>();
             if (_authManager == null)
                 _authManager = gameObject.AddComponent<ServerAuthManager>();
@@ -84,19 +80,26 @@ namespace RPG.Network
             NetworkServer.RegisterHandler<MsgClientSceneReady>(OnClientSceneReady, false);
 
             StartCoroutine(CleanExpiredPendingSpawns());
-
-            Debug.Log("[RPGNetworkManager] Servidor iniciado.");
         }
 
         public override void OnStartClient()
         {
             base.OnStartClient();
-            // Não re-registra se já foi feito — BUG-22
             if (!_prefabsRegistered)
                 RegisterSpawnablePrefabs();
         }
 
-        // ── Conexões ───────────────────────────────────────────────────────
+        public override void OnServerSceneChanged(string sceneName)
+        {
+            base.OnServerSceneChanged(sceneName);
+            // Re-registra ao trocar de cena (novas dungeons podem ter prefabs únicos)
+            _prefabsRegistered = false;
+            RegisterSpawnablePrefabs();
+        }
+
+        // ══════════════════════════════════════════════════════════════════
+        // Conexões
+        // ══════════════════════════════════════════════════════════════════
 
         public override void OnServerConnect(NetworkConnectionToClient conn)
         {
@@ -112,42 +115,31 @@ namespace RPG.Network
             {
                 if (coroutine != null) StopCoroutine(coroutine);
                 _spawnCoroutines.Remove(conn.connectionId);
-                Debug.Log($"[RPGNetworkManager] Spawn cancelado para conn:{conn.connectionId} (desconectou).");
             }
 
             _authManager?.OnServerDisconnect(conn);
             base.OnServerDisconnect(conn);
-            Debug.Log($"[Server] Player desconectado: connId={conn.connectionId}");
         }
 
         public override void OnServerAddPlayer(NetworkConnectionToClient conn)
         {
-            // Vazio — spawn controlado por ServerAuthManager → SpawnPlayerForConnection
+            // Spawn é controlado por ServerAuthManager via SpawnPlayerForConnection
         }
 
         public override void OnClientConnect()
         {
             base.OnClientConnect();
-            Debug.Log("[Client] Conectado ao servidor.");
         }
 
         public override void OnClientDisconnect()
         {
             base.OnClientDisconnect();
-            Debug.Log("[Client] Desconectado do servidor.");
             ClientAuthHandler.Instance?.OnDisconnectedFromServer();
         }
 
-        public override void OnServerSceneChanged(string sceneName)
-        {
-            base.OnServerSceneChanged(sceneName);
-            // Re-registra ao trocar de cena (novos monstros podem existir)
-            // Reseta a flag para forçar re-registro
-            _prefabsRegistered = false;
-            RegisterSpawnablePrefabs();
-        }
-
-        // ── Spawn do player ────────────────────────────────────────────────
+        // ══════════════════════════════════════════════════════════════════
+        // Spawn do player
+        // ══════════════════════════════════════════════════════════════════
 
         [Server]
         public void SpawnPlayerForConnection(
@@ -157,8 +149,12 @@ namespace RPG.Network
         {
             if (playerPrefab == null)
             {
-                Debug.LogError("[RPGNetworkManager] playerPrefab não configurado!");
-                conn.Send(new MsgSelectCharacterResponse { Success = false, Error = "Erro interno do servidor." });
+                Debug.LogError("[RPGNetworkManager] playerPrefab nulo no spawn.");
+                conn.Send(new MsgSelectCharacterResponse
+                {
+                    Success = false,
+                    Error   = "Erro interno do servidor."
+                });
                 return;
             }
 
@@ -171,30 +167,21 @@ namespace RPG.Network
             };
 
             conn.Send(new MsgSelectCharacterResponse { Success = true });
-
-            Debug.Log($"[RPGNetworkManager] {charData.CharacterName} na fila. " +
-                      $"Timeout em {PENDING_SPAWN_TIMEOUT}s. Aguardando cena pronta.");
         }
 
         [Server]
         private void OnClientSceneReady(NetworkConnectionToClient conn, MsgClientSceneReady msg)
         {
-            if (!_pendingSpawns.TryGetValue(conn.connectionId, out var pending))
-            {
-                Debug.LogWarning($"[RPGNetworkManager] MsgClientSceneReady de conn:{conn.connectionId} " +
-                                 "sem spawn pendente (talvez já expirou). Ignorando.");
-                return;
-            }
+            if (!_pendingSpawns.TryGetValue(conn.connectionId, out var pending)) return;
 
             if (Time.time > pending.ExpiresAt)
             {
-                Debug.LogWarning($"[RPGNetworkManager] Spawn de {pending.CharData.CharacterName} expirou.");
+                Debug.LogWarning($"[RPGNetworkManager] Spawn expirado: {pending.CharData?.CharacterName}");
                 _pendingSpawns.Remove(conn.connectionId);
                 return;
             }
 
             _pendingSpawns.Remove(conn.connectionId);
-            Debug.Log($"[RPGNetworkManager] Cena confirmada. Spawnando {pending.CharData.CharacterName}...");
 
             var coroutine = StartCoroutine(DoSpawnPlayer(conn, pending.CharData, pending.AccountUsername));
             _spawnCoroutines[conn.connectionId] = coroutine;
@@ -206,17 +193,19 @@ namespace RPG.Network
             CharacterData charData,
             string accountUsername)
         {
+            int connId = conn?.connectionId ?? -1;
+
             if (conn == null || !conn.isReady)
             {
-                Debug.LogWarning("[RPGNetworkManager] Conexão perdida antes de iniciar spawn.");
-                _spawnCoroutines.Remove(conn?.connectionId ?? -1);
+                _spawnCoroutines.Remove(connId);
                 yield break;
             }
 
             Vector3 spawnPos = GetSpawnPositionForRace(charData.Race, charData);
 
+            // Espera o NavMesh disponibilizar a posição
             float elapsed = 0f;
-            while (elapsed < 5f)
+            while (elapsed < SPAWN_NAVMESH_TIMEOUT)
             {
                 if (NavMesh.SamplePosition(spawnPos, out NavMeshHit hit, SPAWN_NAVMESH_RADIUS, NavMesh.AllAreas))
                 {
@@ -229,8 +218,7 @@ namespace RPG.Network
 
             if (conn == null || !conn.isReady)
             {
-                Debug.LogWarning("[RPGNetworkManager] Conexão perdida durante espera de NavMesh.");
-                _spawnCoroutines.Remove(conn?.connectionId ?? -1);
+                _spawnCoroutines.Remove(connId);
                 yield break;
             }
 
@@ -241,40 +229,37 @@ namespace RPG.Network
             if (netPlayer != null)
                 netPlayer.ServerInitialize(charData, accountUsername);
             else
-                Debug.LogError("[RPGNetworkManager] playerPrefab não tem NetworkPlayer!");
+                Debug.LogError("[RPGNetworkManager] playerPrefab não tem NetworkPlayer.");
 
-            _spawnCoroutines.Remove(conn.connectionId);
+            _spawnCoroutines.Remove(connId);
 
-            Debug.Log($"[Server] Spawnado: {charData.CharacterName} ({charData.Race}) " +
-                      $"| connId={conn.connectionId} | pos={spawnPos}");
+            Debug.Log($"[Server] Spawnado: {charData.CharacterName} ({charData.Race}) | connId={connId}");
         }
-
-        // ── Limpeza de spawns expirados ────────────────────────────────────
 
         [Server]
         private IEnumerator CleanExpiredPendingSpawns()
         {
-            var wait = new WaitForSeconds(5f);
+            var wait = new WaitForSeconds(CLEANUP_PENDING_SPAWN_S);
+            var toRemove = new List<int>();
+
             while (true)
             {
                 yield return wait;
 
-                var toRemove = new List<int>();
+                toRemove.Clear();
                 foreach (var kv in _pendingSpawns)
                 {
                     if (Time.time > kv.Value.ExpiresAt)
-                    {
                         toRemove.Add(kv.Key);
-                        Debug.LogWarning($"[RPGNetworkManager] Spawn expirado: " +
-                                         $"connId={kv.Key} char={kv.Value.CharData?.CharacterName}");
-                    }
                 }
                 foreach (var id in toRemove)
                     _pendingSpawns.Remove(id);
             }
         }
 
-        // ── Spawn point por raça ───────────────────────────────────────────
+        // ══════════════════════════════════════════════════════════════════
+        // Spawn points
+        // ══════════════════════════════════════════════════════════════════
 
         public Vector3 GetSpawnPositionForRace(CharacterRace race, CharacterData charData)
         {
@@ -282,26 +267,20 @@ namespace RPG.Network
             if (saved.sqrMagnitude > 0.01f &&
                 NavMesh.SamplePosition(saved, out NavMeshHit savedHit, 5f, NavMesh.AllAreas))
             {
-                Debug.Log($"[RPGNetworkManager] {charData.CharacterName}: posição salva {savedHit.position}");
                 return savedHit.position;
             }
 
             if (RaceSpawnPoints.TryGetValue(race, out Vector3 racePos))
-            {
-                Debug.Log($"[RPGNetworkManager] {charData.CharacterName} ({race}): spawn da raça em {racePos}");
                 return racePos;
-            }
 
             Debug.LogWarning($"[RPGNetworkManager] Raça {race} sem spawn point. Usando origem.");
             return Vector3.zero;
         }
 
-        // ── Registro de prefabs ────────────────────────────────────────────
+        // ══════════════════════════════════════════════════════════════════
+        // Registro de prefabs
+        // ══════════════════════════════════════════════════════════════════
 
-        /// <summary>
-        /// BUG-22 CORRIGIDO: registra prefabs apenas uma vez por flag.
-        /// Evita warnings de registro duplicado e trabalho desnecessário.
-        /// </summary>
         private void RegisterSpawnablePrefabs()
         {
             if (_prefabsRegistered) return;
@@ -314,7 +293,7 @@ namespace RPG.Network
                 var identity = prefab.GetComponent<NetworkIdentity>();
                 if (identity == null)
                 {
-                    Debug.LogError($"[RPGNetworkManager] '{prefab.name}' sem NetworkIdentity!");
+                    Debug.LogError($"[RPGNetworkManager] '{prefab.name}' sem NetworkIdentity.");
                     continue;
                 }
                 if (!NetworkClient.prefabs.ContainsKey(identity.assetId))

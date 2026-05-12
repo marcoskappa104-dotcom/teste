@@ -6,28 +6,15 @@ using UnityEngine;
 namespace RPG.Data
 {
     /// <summary>
-    /// EquipmentTypes v1 — sistema de equipamento extensível.
-    ///
-    /// Define todos os tipos relacionados a equipamento: slots, requisitos,
-    /// dados sincronizáveis e helpers. Arquivo único para evitar fragmentação.
-    ///
-    /// EXTENSIBILIDADE:
-    ///   O enum EquipmentSlot inclui slots reservados (Cape, Necklace, Earring1, Earring2)
-    ///   que ainda não estão visíveis na UI mas já fazem parte do protocolo de rede e
-    ///   da persistência. Adicionar um novo slot no futuro requer apenas:
-    ///     1. Adicionar à lista EquipmentSlotEx.ActiveSlots.
-    ///     2. Criar o widget de UI correspondente em EquipmentPanelUI.
-    ///   Saves antigos NÃO são afetados — slots ausentes simplesmente não retornam itens.
-    ///
-    /// COMPATIBILIDADE:
-    ///   - byte (0–255): cap mais que suficiente; cabe em SyncList sem overhead.
-    ///   - CharacterRaceFlags: bit-flags permitem combinar várias raças (ex: "Apenas Anões e Orcs").
+    /// Slots de equipamento. Os reservados (Cape, Necklace, Earring1/2) já existem
+    /// no protocolo de rede — para ativá-los basta incluí-los em ActiveSlots e
+    /// criar o widget de UI correspondente.
     /// </summary>
     public enum EquipmentSlot : byte
     {
         None      = 0,
 
-        // ── Slots ativos (visíveis na UI hoje) ─────────────────────────────
+        // Ativos
         Weapon    = 1,
         Shield    = 2,
         Helmet    = 3,
@@ -37,17 +24,13 @@ namespace RPG.Data
         Ring1     = 7,
         Ring2     = 8,
 
-        // ── Slots reservados (futuro — protocolo já compatível) ────────────
+        // Reservados (protocolo já compatível)
         Cape      = 9,
         Necklace  = 10,
         Earring1  = 11,
         Earring2  = 12,
     }
 
-    /// <summary>
-    /// Bit-flags para representar conjuntos de raças permitidas em um equipamento.
-    /// Permite que UM item liste múltiplas raças sem necessidade de array.
-    /// </summary>
     [Flags]
     public enum CharacterRaceFlags : byte
     {
@@ -61,20 +44,18 @@ namespace RPG.Data
     }
 
     /// <summary>
-    /// Estrutura sincronizada via Mirror SyncList que representa um item equipado.
-    /// Apenas o ItemId é trafegado pela rede — o cliente resolve o ItemData
-    /// localmente via ItemDatabase, mantendo o tráfego mínimo.
-    ///
-    /// Durability/MaxDurability incluídos desde já para suportar sistema futuro
-    /// de degradação de equipamento sem quebrar o protocolo.
+    /// Item equipado — sincronizado via SyncList.
+    /// Apenas o ItemId trafega na rede; o ItemData completo é resolvido no
+    /// cliente via ItemDatabase. Durability/MaxDurability fazem parte do
+    /// protocolo desde já para suportar degradação futura.
     /// </summary>
     [Serializable]
     public struct EquippedItemData : IEquatable<EquippedItemData>
     {
-        public byte   Slot;          // EquipmentSlot (cast)
-        public string ItemId;        // referência ao ItemDatabase
-        public int    Durability;    // 0 = quebrado / -1 = indestrutível (ver MaxDurability)
-        public int    MaxDurability; // 0 = indestrutível, >0 = degradável
+        public byte   Slot;
+        public string ItemId;
+        public int    Durability;     // -1 = indestrutível
+        public int    MaxDurability;  // 0 = indestrutível
 
         public EquipmentSlot SlotEnum
         {
@@ -91,27 +72,29 @@ namespace RPG.Data
             {
                 Slot          = (byte)slot,
                 ItemId        = itemId ?? "",
-                Durability    = maxDurability > 0 ? Math.Max(0, durability < 0 ? maxDurability : durability) : -1,
+                Durability    = maxDurability > 0
+                    ? Math.Max(0, durability < 0 ? maxDurability : durability)
+                    : -1,
                 MaxDurability = maxDurability
             };
         }
 
         public bool Equals(EquippedItemData other)
-            => Slot == other.Slot && ItemId == other.ItemId
-               && Durability == other.Durability && MaxDurability == other.MaxDurability;
+            => Slot == other.Slot
+               && ItemId == other.ItemId
+               && Durability == other.Durability
+               && MaxDurability == other.MaxDurability;
 
         public override bool Equals(object obj) => obj is EquippedItemData e && Equals(e);
 
         public override int GetHashCode()
-            => unchecked((Slot * 397) ^ (ItemId?.GetHashCode() ?? 0) ^ Durability ^ MaxDurability);
+            => unchecked((Slot * 397) ^ (ItemId?.GetHashCode() ?? 0)
+                         ^ Durability ^ MaxDurability);
     }
 
     /// <summary>
-    /// Requisitos para equipar um item.
-    ///
-    /// Validados SOMENTE no servidor (NetworkInventory.ServerEquipItem).
-    /// O cliente exibe os requisitos no tooltip mas nunca confia no resultado
-    /// para liberar o equip — toda a validação é server-authoritative.
+    /// Requisitos para equipar. Validados SOMENTE no servidor.
+    /// O cliente os usa apenas para tooltips informativos.
     /// </summary>
     [Serializable]
     public class EquipmentRequirements
@@ -119,13 +102,9 @@ namespace RPG.Data
         public int MinLevel = 1;
         public int MinSTR, MinAGI, MinVIT, MinDEX, MinINT, MinLUK;
 
-        [Tooltip("Bit-flags de raças que podem equipar. Padrão: All (qualquer raça).")]
+        [Tooltip("Bit-flags de raças permitidas. Padrão: All.")]
         public CharacterRaceFlags AllowedRaces = CharacterRaceFlags.All;
 
-        /// <summary>
-        /// Verifica se o personagem pode equipar este item.
-        /// Recebe atributos TOTAIS já somados (base + raça + alocados + buffs).
-        /// </summary>
         public bool Check(int level,
                           int totalSTR, int totalAGI, int totalVIT,
                           int totalDEX, int totalINT, int totalLUK,
@@ -135,25 +114,21 @@ namespace RPG.Data
             if (level < MinLevel)
             { failReason = $"Requer nível {MinLevel} (você é {level})."; return false; }
 
-            if (totalSTR < MinSTR) { failReason = $"Requer STR {MinSTR}.";                         return false; }
-            if (totalAGI < MinAGI) { failReason = $"Requer AGI {MinAGI}.";                         return false; }
-            if (totalVIT < MinVIT) { failReason = $"Requer VIT {MinVIT}.";                         return false; }
-            if (totalDEX < MinDEX) { failReason = $"Requer DEX {MinDEX}.";                         return false; }
-            if (totalINT < MinINT) { failReason = $"Requer INT {MinINT}.";                         return false; }
-            if (totalLUK < MinLUK) { failReason = $"Requer LUK {MinLUK}.";                         return false; }
+            if (totalSTR < MinSTR) { failReason = $"Requer STR {MinSTR}."; return false; }
+            if (totalAGI < MinAGI) { failReason = $"Requer AGI {MinAGI}."; return false; }
+            if (totalVIT < MinVIT) { failReason = $"Requer VIT {MinVIT}."; return false; }
+            if (totalDEX < MinDEX) { failReason = $"Requer DEX {MinDEX}."; return false; }
+            if (totalINT < MinINT) { failReason = $"Requer INT {MinINT}."; return false; }
+            if (totalLUK < MinLUK) { failReason = $"Requer LUK {MinLUK}."; return false; }
 
             var raceFlag = EquipmentSlotEx.ToFlag(race);
             if ((AllowedRaces & raceFlag) == 0)
-            { failReason = $"Sua raça não pode equipar este item."; return false; }
+            { failReason = "Sua raça não pode equipar este item."; return false; }
 
             failReason = null;
             return true;
         }
 
-        /// <summary>
-        /// Verifica apenas pelo nível e atributos visíveis (sem raça).
-        /// Útil para coloração no tooltip sem precisar simular tudo.
-        /// </summary>
         public bool CheckBasic(int level,
                                int totalSTR, int totalAGI, int totalVIT,
                                int totalDEX, int totalINT, int totalLUK)
@@ -164,14 +139,10 @@ namespace RPG.Data
         }
     }
 
-    /// <summary>
-    /// Helpers estáticos para EquipmentSlot — nomes de exibição, agrupamento, etc.
-    /// </summary>
     public static class EquipmentSlotEx
     {
         /// <summary>
-        /// Slots VISÍVEIS na UI hoje. Para adicionar Cape/Necklace etc:
-        /// inclua aqui e crie o EquipmentSlotUI correspondente em EquipmentPanelUI.
+        /// Slots visíveis hoje. Adicione novos aqui + crie EquipmentSlotUI no painel.
         /// </summary>
         public static readonly EquipmentSlot[] ActiveSlots =
         {
@@ -185,8 +156,31 @@ namespace RPG.Data
             EquipmentSlot.Ring2,
         };
 
-        /// <summary>Conjunto rápido de lookup para validar se um slot está ativo.</summary>
         private static readonly HashSet<EquipmentSlot> _activeSet = new HashSet<EquipmentSlot>(ActiveSlots);
+
+        // Cache para evitar alocação em hot paths (validações por hit)
+        private static readonly CharacterRaceFlags[] _raceFlagCache;
+
+        static EquipmentSlotEx()
+        {
+            var values = (CharacterRace[])Enum.GetValues(typeof(CharacterRace));
+            int maxIndex = 0;
+            foreach (var r in values) maxIndex = Math.Max(maxIndex, (int)r);
+
+            _raceFlagCache = new CharacterRaceFlags[maxIndex + 1];
+            foreach (var r in values)
+            {
+                _raceFlagCache[(int)r] = r switch
+                {
+                    CharacterRace.Human  => CharacterRaceFlags.Human,
+                    CharacterRace.Elf    => CharacterRaceFlags.Elf,
+                    CharacterRace.Dwarf  => CharacterRaceFlags.Dwarf,
+                    CharacterRace.Orc    => CharacterRaceFlags.Orc,
+                    CharacterRace.Undead => CharacterRaceFlags.Undead,
+                    _                    => CharacterRaceFlags.None
+                };
+            }
+        }
 
         public static bool IsActive(EquipmentSlot slot) => _activeSet.Contains(slot);
 
@@ -214,20 +208,16 @@ namespace RPG.Data
             _                      => slot.ToString()
         };
 
-        public static CharacterRaceFlags ToFlag(CharacterRace race) => race switch
-        {
-            CharacterRace.Human  => CharacterRaceFlags.Human,
-            CharacterRace.Elf    => CharacterRaceFlags.Elf,
-            CharacterRace.Dwarf  => CharacterRaceFlags.Dwarf,
-            CharacterRace.Orc    => CharacterRaceFlags.Orc,
-            CharacterRace.Undead => CharacterRaceFlags.Undead,
-            _                    => CharacterRaceFlags.None
-        };
-
         /// <summary>
-        /// Converte um conjunto de flags em texto legível.
-        /// Ex: "Apenas Anões, Orcs" ou "Todas as raças".
+        /// Conversão race→flag SEM alocação ou Enum.Parse. Usa array cacheado.
         /// </summary>
+        public static CharacterRaceFlags ToFlag(CharacterRace race)
+        {
+            int idx = (int)race;
+            if (idx < 0 || idx >= _raceFlagCache.Length) return CharacterRaceFlags.None;
+            return _raceFlagCache[idx];
+        }
+
         public static string FlagsDisplayName(CharacterRaceFlags flags)
         {
             if (flags == CharacterRaceFlags.None) return "Nenhuma raça";
@@ -242,11 +232,6 @@ namespace RPG.Data
             return $"Apenas {string.Join(", ", names)}";
         }
 
-        /// <summary>
-        /// Determina se um item pode ir no slot escolhido pelo jogador.
-        /// Itens de anel podem ir em Ring1 OU Ring2; brincos idem.
-        /// Outros itens devem ir no slot exato.
-        /// </summary>
         public static bool CanItemFitInSlot(EquipmentSlot itemSlot, EquipmentSlot targetSlot)
         {
             if (itemSlot == targetSlot) return true;
@@ -256,12 +241,9 @@ namespace RPG.Data
         }
 
         /// <summary>
-        /// Soma os bônus de TODOS os itens equipados em um único EquipmentBonuses.
-        /// Usado tanto no servidor (ao recalcular stats) quanto no cliente
-        /// (ao aplicar mudanças de SyncList no PlayerEntity).
-        ///
-        /// Se um itemId não existir no ItemDatabase, é silenciosamente ignorado
-        /// (item removido em patch, etc) — nunca crasha.
+        /// Agrega todos os bônus de equipamento em um único EquipmentBonuses.
+        /// Itens não encontrados no ItemDatabase são silenciosamente ignorados
+        /// (ex: removidos em patch — não crasha).
         /// </summary>
         public static EquipmentBonuses AggregateBonuses(IEnumerable<EquippedItemData> equipped)
         {

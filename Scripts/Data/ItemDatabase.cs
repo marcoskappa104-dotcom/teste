@@ -4,18 +4,15 @@ using System.Collections.Generic;
 namespace RPG.Data
 {
     /// <summary>
-    /// ItemDatabase — Registry singleton de todos os ItemData do jogo.
+    /// Registry singleton de todos os ItemData do jogo.
     ///
-    /// SETUP:
+    /// Setup:
     ///   1. Crie um GameObject na GameplayScene chamado "ItemDatabase".
     ///   2. Adicione este componente.
-    ///   3. Arraste TODOS os ScriptableObjects de item para a lista 'allItems'.
+    ///   3. Arraste TODOS os ScriptableObjects de item para 'allItems'.
     ///
-    /// COMO FUNCIONA:
-    ///   - No servidor e cliente, GetItem(id) retorna o ItemData correto.
-    ///   - O NetworkInventory trafega apenas strings (ItemId) pela rede,
-    ///     não os ScriptableObjects — assim o tráfego é mínimo.
-    ///   - O cliente resolve o ID → ItemData localmente via este database.
+    /// O NetworkInventory trafega apenas ItemIds (strings) na rede; cliente
+    /// e servidor resolvem o ItemData localmente via este database.
     /// </summary>
     public class ItemDatabase : MonoBehaviour
     {
@@ -40,22 +37,24 @@ namespace RPG.Data
             foreach (var item in allItems)
             {
                 if (item == null) continue;
+
                 if (string.IsNullOrEmpty(item.ItemId))
                 {
-                    Debug.LogError($"[ItemDatabase] Item '{item.name}' tem ItemId vazio!");
+                    Debug.LogError($"[ItemDatabase] '{item.name}' tem ItemId vazio.");
                     continue;
                 }
+
                 if (_lookup.ContainsKey(item.ItemId))
                 {
-                    Debug.LogError($"[ItemDatabase] ID duplicado: '{item.ItemId}' em '{item.name}'!");
+                    Debug.LogError($"[ItemDatabase] ID duplicado: '{item.ItemId}' em '{item.name}'.");
                     continue;
                 }
+
                 _lookup[item.ItemId] = item;
             }
             Debug.Log($"[ItemDatabase] {_lookup.Count} itens registrados.");
         }
 
-        /// <summary>Retorna null se o item não existir no database.</summary>
         public ItemData GetItem(string itemId)
         {
             if (string.IsNullOrEmpty(itemId)) return null;
@@ -63,7 +62,8 @@ namespace RPG.Data
             return item;
         }
 
-        public bool Contains(string itemId) => _lookup.ContainsKey(itemId);
+        public bool Contains(string itemId)
+            => !string.IsNullOrEmpty(itemId) && _lookup.ContainsKey(itemId);
 
         public List<ItemData> GetAllItems() => new List<ItemData>(allItems);
 
@@ -77,10 +77,10 @@ namespace RPG.Data
         }
 
         /// <summary>
-        /// Sorteia um ItemId com base nos pesos de drop da lista fornecida.
-        /// Retorna null se a lista estiver vazia ou todos os pesos forem 0.
+        /// Sorteia um ItemId com base nos pesos de drop.
+        /// Aceita System.Random opcional para uso fora do main thread.
         /// </summary>
-        public static string RollDrop(List<ItemData> pool)
+        public static string RollDrop(List<ItemData> pool, System.Random rng = null)
         {
             if (pool == null || pool.Count == 0) return null;
 
@@ -90,8 +90,11 @@ namespace RPG.Data
 
             if (totalWeight <= 0) return null;
 
-            int roll = Random.Range(0, totalWeight);
-            int acc  = 0;
+            int roll = rng != null
+                ? rng.Next(0, totalWeight)
+                : Random.Range(0, totalWeight);
+
+            int acc = 0;
             foreach (var item in pool)
             {
                 if (item == null) continue;

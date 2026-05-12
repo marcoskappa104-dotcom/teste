@@ -1,23 +1,19 @@
 using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
+using Mirror;
 using RPG.Managers;
 using RPG.Network;
 
 namespace RPG.UI
 {
     /// <summary>
-    /// LoginUIController v3
-    ///
-    /// CORREÇÕES:
-    ///   - Trata desconexão do servidor (mostra mensagem de erro).
-    ///   - Ao voltar para LoginScene após desconexão, o NetworkManager já
-    ///     existe (DontDestroyOnLoad) — não tentamos reconectar.
-    ///   - Botão de login mostra "Conectando..." e aguarda resposta.
+    /// Tela de login. Comunica-se com ClientAuthHandler para autenticar.
+    /// Mostra mensagens de erro e estado de conexão.
     /// </summary>
     public class LoginUIController : MonoBehaviour
     {
-        [Header("Panels")]
+        [Header("Painéis")]
         [SerializeField] private GameObject loginPanel;
         [SerializeField] private GameObject createAccountPanel;
 
@@ -38,6 +34,9 @@ namespace RPG.UI
         [SerializeField] private TMP_Text       createErrorText;
         [SerializeField] private TMP_Text       createSuccessText;
 
+        private const float SUCCESS_RETURN_DELAY = 1.5f;
+        private const int   MIN_USERNAME_LENGTH  = 4;
+
         private void Start()
         {
             ShowLoginPanel();
@@ -52,35 +51,40 @@ namespace RPG.UI
 
             if (ClientAuthHandler.Instance != null)
             {
-                ClientAuthHandler.Instance.OnLoginResult        += HandleLoginResult;
+                ClientAuthHandler.Instance.OnLoginResult         += HandleLoginResult;
                 ClientAuthHandler.Instance.OnCreateAccountResult += HandleCreateAccountResult;
                 ClientAuthHandler.Instance.OnServerDisconnected  += HandleServerDisconnected;
             }
             else
             {
-                Debug.LogWarning("[LoginUI] ClientAuthHandler não encontrado! " +
-                                 "Certifique-se que está na cena de Login.");
+                Debug.LogWarning("[LoginUI] ClientAuthHandler não encontrado.");
                 SetStatus("Erro: ClientAuthHandler não encontrado.", isError: true);
             }
 
-            // Se não há conexão ativa, mostra status
-            if (!Mirror.NetworkClient.isConnected && !Mirror.NetworkServer.active)
-                SetStatus("Aguardando conexão com o servidor...");
-            else if (Mirror.NetworkClient.isConnected)
-                SetStatus("Conectado.", isError: false);
+            UpdateConnectionStatus();
         }
 
         private void OnDestroy()
         {
             if (ClientAuthHandler.Instance != null)
             {
-                ClientAuthHandler.Instance.OnLoginResult        -= HandleLoginResult;
+                ClientAuthHandler.Instance.OnLoginResult         -= HandleLoginResult;
                 ClientAuthHandler.Instance.OnCreateAccountResult -= HandleCreateAccountResult;
                 ClientAuthHandler.Instance.OnServerDisconnected  -= HandleServerDisconnected;
             }
         }
 
-        // ── Painéis ───────────────────────────────────────────────────────
+        private void UpdateConnectionStatus()
+        {
+            if (!NetworkClient.isConnected && !NetworkServer.active)
+                SetStatus("Aguardando conexão com o servidor...");
+            else if (NetworkClient.isConnected)
+                SetStatus("Conectado.", isError: false);
+        }
+
+        // ══════════════════════════════════════════════════════════════════
+        // Painéis
+        // ══════════════════════════════════════════════════════════════════
 
         private void ShowLoginPanel()
         {
@@ -100,7 +104,9 @@ namespace RPG.UI
             ClearCreateFields();
         }
 
-        // ── Ações ─────────────────────────────────────────────────────────
+        // ══════════════════════════════════════════════════════════════════
+        // Ações
+        // ══════════════════════════════════════════════════════════════════
 
         private void OnLoginClicked()
         {
@@ -111,13 +117,13 @@ namespace RPG.UI
 
             if (string.IsNullOrWhiteSpace(user) || string.IsNullOrWhiteSpace(pass))
             {
-                if (loginErrorText) loginErrorText.text = "Preencha usuário e senha.";
+                SetLoginError("Preencha usuário e senha.");
                 return;
             }
 
-            if (!Mirror.NetworkClient.isConnected)
+            if (!NetworkClient.isConnected)
             {
-                if (loginErrorText) loginErrorText.text = "Sem conexão com o servidor.";
+                SetLoginError("Sem conexão com o servidor.");
                 return;
             }
 
@@ -135,24 +141,24 @@ namespace RPG.UI
             string pass    = createPasswordInput.text;
             string confirm = createConfirmPasswordInput.text;
 
-            if (user.Length < 4)
+            if (user.Length < MIN_USERNAME_LENGTH)
             {
-                if (createErrorText) createErrorText.text = "Username: mínimo 4 caracteres.";
+                SetCreateError($"Username: mínimo {MIN_USERNAME_LENGTH} caracteres.");
                 return;
             }
             if (string.IsNullOrWhiteSpace(pass))
             {
-                if (createErrorText) createErrorText.text = "Digite uma senha.";
+                SetCreateError("Digite uma senha.");
                 return;
             }
             if (pass != confirm)
             {
-                if (createErrorText) createErrorText.text = "Senhas não coincidem.";
+                SetCreateError("Senhas não coincidem.");
                 return;
             }
-            if (!Mirror.NetworkClient.isConnected)
+            if (!NetworkClient.isConnected)
             {
-                if (createErrorText) createErrorText.text = "Sem conexão com o servidor.";
+                SetCreateError("Sem conexão com o servidor.");
                 return;
             }
 
@@ -160,7 +166,9 @@ namespace RPG.UI
             ClientAuthHandler.Instance?.SendCreateAccount(user, pass);
         }
 
-        // ── Handlers de resposta ──────────────────────────────────────────
+        // ══════════════════════════════════════════════════════════════════
+        // Handlers
+        // ══════════════════════════════════════════════════════════════════
 
         private void HandleLoginResult(bool success, string error)
         {
@@ -170,7 +178,7 @@ namespace RPG.UI
             if (success)
                 GameManager.Instance?.GoToCharacterSelect();
             else
-                if (loginErrorText) loginErrorText.text = error ?? "Erro de login.";
+                SetLoginError(error ?? "Erro de login.");
         }
 
         private void HandleCreateAccountResult(bool success, string error)
@@ -180,11 +188,11 @@ namespace RPG.UI
             {
                 if (createSuccessText) createSuccessText.text = "Conta criada! Faça login.";
                 ClearCreateFields();
-                Invoke(nameof(ShowLoginPanel), 1.5f);
+                Invoke(nameof(ShowLoginPanel), SUCCESS_RETURN_DELAY);
             }
             else
             {
-                if (createErrorText) createErrorText.text = error ?? "Erro ao criar conta.";
+                SetCreateError(error ?? "Erro ao criar conta.");
             }
         }
 
@@ -194,13 +202,25 @@ namespace RPG.UI
             SetStatus("Desconectado do servidor.", isError: true);
         }
 
-        // ── Helpers ───────────────────────────────────────────────────────
+        // ══════════════════════════════════════════════════════════════════
+        // Helpers
+        // ══════════════════════════════════════════════════════════════════
 
         private void SetStatus(string msg, bool isError = false)
         {
             if (loginStatusText == null) return;
             loginStatusText.text  = msg;
             loginStatusText.color = isError ? Color.red : Color.white;
+        }
+
+        private void SetLoginError(string msg)
+        {
+            if (loginErrorText != null) loginErrorText.text = msg;
+        }
+
+        private void SetCreateError(string msg)
+        {
+            if (createErrorText != null) createErrorText.text = msg;
         }
 
         private void SetInputsInteractable(bool value)

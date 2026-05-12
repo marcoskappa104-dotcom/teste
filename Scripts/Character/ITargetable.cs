@@ -3,8 +3,8 @@ using UnityEngine;
 namespace RPG.Character
 {
     /// <summary>
-    /// Interface implementada por qualquer entidade selecionável:
-    /// monstros, NPCs, outros jogadores.
+    /// Entidade selecionável por raycast: monstros, NPCs, jogadores.
+    /// Toda lógica de dano é server-authoritative — não há TakeDamage no cliente.
     /// </summary>
     public interface ITargetable
     {
@@ -16,17 +16,11 @@ namespace RPG.Character
 
         void OnSelected();
         void OnDeselected();
-
-        /// <summary>
-        /// TakeDamage via ITargetable é usado SOMENTE em modo offline/testes.
-        /// Em modo multiplayer, o dano passa por CmdRequestAttack no servidor.
-        /// </summary>
-        void TakeDamage(float rawAtk, float rawMatk, bool isPhysical);
     }
 
     /// <summary>
     /// Componente base para entidades selecionáveis.
-    /// Gerencia o indicador visual de seleção (círculo no chão).
+    /// Gerencia apenas o indicador visual de seleção.
     /// </summary>
     public abstract class TargetableEntity : MonoBehaviour, ITargetable
     {
@@ -52,8 +46,6 @@ namespace RPG.Character
             if (selectionIndicator != null)
                 selectionIndicator.SetActive(false);
         }
-
-        public abstract void TakeDamage(float rawAtk, float rawMatk, bool isPhysical);
 
         protected virtual void Awake()
         {

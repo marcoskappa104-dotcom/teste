@@ -19,190 +19,108 @@ namespace RPG.Managers
     [Table("accounts")]
     public class AccountRow
     {
-        [PrimaryKey][Column("username")]
-        public string Username { get; set; }
-
-        [Column("password_hash"), NotNull]
-        public string PasswordHash { get; set; }
-
-        [Column("created_at"), NotNull]
-        public string CreatedAt { get; set; }
-
-        [Column("last_login")]
-        public string LastLogin { get; set; }
+        [PrimaryKey][Column("username")] public string Username { get; set; }
+        [Column("password_hash"), NotNull] public string PasswordHash { get; set; }
+        [Column("created_at"), NotNull] public string CreatedAt { get; set; }
+        [Column("last_login")] public string LastLogin { get; set; }
     }
 
     [Table("characters")]
     public class CharacterRow
     {
-        [PrimaryKey][Column("character_id")]
-        public string CharacterId { get; set; }
-
-        [Column("username"), NotNull, Indexed]
-        public string Username { get; set; }
-
-        [Column("character_name"), NotNull, Unique]
-        public string CharacterName { get; set; }
-
-        [Column("race")]
-        public int Race { get; set; }
-
-        [Column("level")]
-        public int Level { get; set; } = 1;
-
-        [Column("experience")]
-        public long Experience { get; set; } = 0;
-
-        [Column("exp_to_next")]
-        public long ExpToNext { get; set; } = 100;
-
-        [Column("current_hp")]
-        public float CurrentHP { get; set; } = 100f;
-
-        [Column("current_mp")]
-        public float CurrentMP { get; set; } = 50f;
-
-        [Column("pos_x")]
-        public float PosX { get; set; } = 0f;
-
-        [Column("pos_y")]
-        public float PosY { get; set; } = 1f;
-
-        [Column("pos_z")]
-        public float PosZ { get; set; } = 0f;
-
-        [Column("current_map"), Indexed]
-        public string CurrentMap { get; set; } = "World_01";
-
-        [Column("free_points")]
-        public int FreePoints { get; set; } = 0;
-
-        [Column("alloc_str")]  public int AllocSTR { get; set; } = 0;
-        [Column("alloc_agi")]  public int AllocAGI { get; set; } = 0;
-        [Column("alloc_vit")]  public int AllocVIT { get; set; } = 0;
-        [Column("alloc_dex")]  public int AllocDEX { get; set; } = 0;
-        [Column("alloc_int")]  public int AllocINT { get; set; } = 0;
-        [Column("alloc_luk")]  public int AllocLUK { get; set; } = 0;
-
-        [Column("base_str")]   public int BaseSTR { get; set; } = 10;
-        [Column("base_agi")]   public int BaseAGI { get; set; } = 10;
-        [Column("base_vit")]   public int BaseVIT { get; set; } = 10;
-        [Column("base_dex")]   public int BaseDEX { get; set; } = 10;
-        [Column("base_int")]   public int BaseINT { get; set; } = 10;
-        [Column("base_luk")]   public int BaseLUK { get; set; } = 10;
+        [PrimaryKey][Column("character_id")] public string CharacterId { get; set; }
+        [Column("username"), NotNull, Indexed] public string Username { get; set; }
+        [Column("character_name"), NotNull, Unique] public string CharacterName { get; set; }
+        [Column("race")] public int Race { get; set; }
+        [Column("level")] public int Level { get; set; } = 1;
+        [Column("experience")] public long Experience { get; set; } = 0;
+        [Column("exp_to_next")] public long ExpToNext { get; set; } = 100;
+        [Column("current_hp")] public float CurrentHP { get; set; } = 100f;
+        [Column("current_mp")] public float CurrentMP { get; set; } = 50f;
+        [Column("pos_x")] public float PosX { get; set; } = 0f;
+        [Column("pos_y")] public float PosY { get; set; } = 1f;
+        [Column("pos_z")] public float PosZ { get; set; } = 0f;
+        [Column("current_map"), Indexed] public string CurrentMap { get; set; } = "World_01";
+        [Column("free_points")] public int FreePoints { get; set; } = 0;
+        [Column("alloc_str")] public int AllocSTR { get; set; } = 0;
+        [Column("alloc_agi")] public int AllocAGI { get; set; } = 0;
+        [Column("alloc_vit")] public int AllocVIT { get; set; } = 0;
+        [Column("alloc_dex")] public int AllocDEX { get; set; } = 0;
+        [Column("alloc_int")] public int AllocINT { get; set; } = 0;
+        [Column("alloc_luk")] public int AllocLUK { get; set; } = 0;
+        [Column("base_str")] public int BaseSTR { get; set; } = 10;
+        [Column("base_agi")] public int BaseAGI { get; set; } = 10;
+        [Column("base_vit")] public int BaseVIT { get; set; } = 10;
+        [Column("base_dex")] public int BaseDEX { get; set; } = 10;
+        [Column("base_int")] public int BaseINT { get; set; } = 10;
+        [Column("base_luk")] public int BaseLUK { get; set; } = 10;
     }
 
     [Table("inventory")]
     public class InventoryRow
     {
-        [PrimaryKey, AutoIncrement][Column("id")]
-        public int Id { get; set; }
-
-        [Column("character_id"), NotNull, Indexed]
-        public string CharacterId { get; set; }
-
-        [Column("item_id"), NotNull]
-        public string ItemId { get; set; }
-
-        [Column("quantity")]
-        public int Quantity { get; set; } = 1;
-
-        [Column("slot_index")]
-        public int SlotIndex { get; set; } = -1;
-
-        [Column("is_equipped")]
-        public bool IsEquipped { get; set; } = false;
+        [PrimaryKey, AutoIncrement][Column("id")] public int Id { get; set; }
+        [Column("character_id"), NotNull, Indexed] public string CharacterId { get; set; }
+        [Column("item_id"), NotNull] public string ItemId { get; set; }
+        [Column("quantity")] public int Quantity { get; set; } = 1;
+        [Column("slot_index")] public int SlotIndex { get; set; } = -1;
+        [Column("is_equipped")] public bool IsEquipped { get; set; } = false;
     }
 
     [Table("gem_loadout")]
     public class GemLoadoutRow
     {
-        [PrimaryKey][Column("character_id")]
-        public string CharacterId { get; set; }
-
+        [PrimaryKey][Column("character_id")] public string CharacterId { get; set; }
         [Column("slot_q")] public string SlotQ { get; set; } = "";
         [Column("slot_w")] public string SlotW { get; set; } = "";
         [Column("slot_e")] public string SlotE { get; set; } = "";
         [Column("slot_r")] public string SlotR { get; set; } = "";
     }
 
-    /// <summary>
-    /// NOVO — tabela dedicada a itens equipados.
-    /// Usar tabela separada (e não is_equipped na inventory) torna a query
-    /// LoadEquipped trivial (filtra apenas por character_id) e mantém a tabela
-    /// inventory como source of truth para slots livres.
-    ///
-    /// Uma linha por slot equipado. Composto por (character_id, slot) único.
-    /// </summary>
     [Table("equipped_items")]
     public class EquippedItemRow
     {
-        [PrimaryKey, AutoIncrement][Column("id")]
-        public int Id { get; set; }
-
-        [Column("character_id"), NotNull, Indexed]
-        public string CharacterId { get; set; }
-
-        /// <summary>byte do EquipmentSlot enum.</summary>
-        [Column("slot"), NotNull]
-        public int Slot { get; set; }
-
-        [Column("item_id"), NotNull]
-        public string ItemId { get; set; }
-
-        /// <summary>-1 = indestrutível; >=0 = atual durabilidade.</summary>
-        [Column("durability")]
-        public int Durability { get; set; } = -1;
-
-        /// <summary>0 = indestrutível.</summary>
-        [Column("max_durability")]
-        public int MaxDurability { get; set; } = 0;
+        [PrimaryKey, AutoIncrement][Column("id")] public int Id { get; set; }
+        [Column("character_id"), NotNull, Indexed] public string CharacterId { get; set; }
+        [Column("slot"), NotNull] public int Slot { get; set; }
+        [Column("item_id"), NotNull] public string ItemId { get; set; }
+        [Column("durability")] public int Durability { get; set; } = -1;
+        [Column("max_durability")] public int MaxDurability { get; set; } = 0;
     }
 
     [Table("economy_log")]
     public class EconomyLogRow
     {
-        [PrimaryKey, AutoIncrement][Column("id")]
-        public int Id { get; set; }
-
-        [Column("character_id"), NotNull, Indexed]
-        public string CharacterId { get; set; }
-
-        [Column("event_type"), NotNull]
-        public string EventType { get; set; }
-
-        [Column("value")]
-        public float Value { get; set; }
-
-        [Column("timestamp"), NotNull]
-        public string Timestamp { get; set; }
+        [PrimaryKey, AutoIncrement][Column("id")] public int Id { get; set; }
+        [Column("character_id"), NotNull, Indexed] public string CharacterId { get; set; }
+        [Column("event_type"), NotNull] public string EventType { get; set; }
+        [Column("value")] public float Value { get; set; }
+        [Column("timestamp"), NotNull] public string Timestamp { get; set; }
     }
 
 #else
-    // ── Stubs das tabelas para o cliente compilar sem SQLite ──────────────
-    public class AccountRow      { public string Username { get; set; } public string PasswordHash { get; set; } public string CreatedAt { get; set; } public string LastLogin { get; set; } }
-    public class CharacterRow    { public string CharacterId { get; set; } public string Username { get; set; } public string CharacterName { get; set; } public int Race { get; set; } public int Level { get; set; } = 1; public long Experience { get; set; } = 0; public long ExpToNext { get; set; } = 100; public float CurrentHP { get; set; } = 100f; public float CurrentMP { get; set; } = 50f; public float PosX { get; set; } = 0f; public float PosY { get; set; } = 1f; public float PosZ { get; set; } = 0f; public string CurrentMap { get; set; } = "World_01"; public int FreePoints { get; set; } = 0; public int AllocSTR { get; set; } = 0; public int AllocAGI { get; set; } = 0; public int AllocVIT { get; set; } = 0; public int AllocDEX { get; set; } = 0; public int AllocINT { get; set; } = 0; public int AllocLUK { get; set; } = 0; public int BaseSTR { get; set; } = 10; public int BaseAGI { get; set; } = 10; public int BaseVIT { get; set; } = 10; public int BaseDEX { get; set; } = 10; public int BaseINT { get; set; } = 10; public int BaseLUK { get; set; } = 10; }
-    public class InventoryRow    { public int Id { get; set; } public string CharacterId { get; set; } public string ItemId { get; set; } public int Quantity { get; set; } = 1; public int SlotIndex { get; set; } = -1; public bool IsEquipped { get; set; } = false; }
-    public class GemLoadoutRow   { public string CharacterId { get; set; } public string SlotQ { get; set; } = ""; public string SlotW { get; set; } = ""; public string SlotE { get; set; } = ""; public string SlotR { get; set; } = ""; }
-    public class EquippedItemRow { public int Id { get; set; } public string CharacterId { get; set; } public int Slot { get; set; } public string ItemId { get; set; } public int Durability { get; set; } = -1; public int MaxDurability { get; set; } = 0; }
-    public class EconomyLogRow   { public int Id { get; set; } public string CharacterId { get; set; } public string EventType { get; set; } public float Value { get; set; } public string Timestamp { get; set; } }
+    // Stubs sem propriedades para cliente compilar
+    public class AccountRow      { public string Username; public string PasswordHash; public string CreatedAt; public string LastLogin; }
+    public class CharacterRow    { public string CharacterId; public string Username; public string CharacterName; public int Race; public int Level=1; public long Experience; public long ExpToNext=100; public float CurrentHP=100f; public float CurrentMP=50f; public float PosX, PosY=1f, PosZ; public string CurrentMap="World_01"; public int FreePoints; public int AllocSTR, AllocAGI, AllocVIT, AllocDEX, AllocINT, AllocLUK; public int BaseSTR=10, BaseAGI=10, BaseVIT=10, BaseDEX=10, BaseINT=10, BaseLUK=10; }
+    public class InventoryRow    { public int Id; public string CharacterId; public string ItemId; public int Quantity=1; public int SlotIndex=-1; public bool IsEquipped; }
+    public class GemLoadoutRow   { public string CharacterId; public string SlotQ=""; public string SlotW=""; public string SlotE=""; public string SlotR=""; }
+    public class EquippedItemRow { public int Id; public string CharacterId; public int Slot; public string ItemId; public int Durability=-1; public int MaxDurability; }
+    public class EconomyLogRow   { public int Id; public string CharacterId; public string EventType; public float Value; public string Timestamp; }
 #endif
 
     // ══════════════════════════════════════════════════════════════════════
-    // DatabaseManager v11
-    // ══════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// DatabaseManager v11
+    /// Persistência em SQLite. Compila integralmente apenas em UNITY_SERVER.
     ///
-    /// MUDANÇAS v11 — Sistema de equipamentos:
-    ///   - Nova tabela `equipped_items` com colunas (slot, item_id, durability, max_durability).
-    ///   - Métodos LoadEquipped(characterId), SaveEquipped(characterId, list).
-    ///   - SaveEquipped usa DELETE + INSERT em massa dentro de transaction para
-    ///     evitar estado inconsistente durante o save.
-    ///
-    ///   Todas as correções v10 mantidas (BaseAttributes persistidas no SaveCharacter,
-    ///   TryLoginWithSignedHash, write thread, WAL).
+    /// Arquitetura:
+    ///   - Leituras: síncronas, com lock no _dbLock.
+    ///   - Escritas: enfileiradas e processadas por uma thread dedicada.
+    ///     Isso evita travar o main thread em I/O. A queue é drenada na
+    ///     ordem de inserção, então a sequência lógica é preservada.
+    ///   - Atomicidade: operações que modificam múltiplas linhas (SaveInventory,
+    ///     SaveEquipped) rodam dentro de RunInTransaction para evitar estado
+    ///     inconsistente em caso de crash.
     /// </summary>
     public class DatabaseManager : MonoBehaviour
     {
@@ -210,15 +128,14 @@ namespace RPG.Managers
 
 #if UNITY_SERVER
         private SQLiteConnection                 _db;
-        private readonly object                  _dbLock             = new object();
-        private bool                             _closed             = false;
-        private readonly ConcurrentQueue<Action> _writeQueue         = new ConcurrentQueue<Action>();
+        private readonly object                  _dbLock              = new object();
+        private bool                             _closed              = false;
+        private readonly ConcurrentQueue<Action> _writeQueue          = new ConcurrentQueue<Action>();
         private Thread                           _writeThread;
         private volatile bool                    _writeThreadRunning;
-        private readonly ManualResetEventSlim    _writeEvent         = new ManualResetEventSlim(false);
+        private readonly ManualResetEventSlim    _writeEvent          = new ManualResetEventSlim(false);
+        private const int                        WRITE_THREAD_JOIN_MS = 5000;
 #endif
-
-        // ── Lifecycle ──────────────────────────────────────────────────────
 
         private void Awake()
         {
@@ -244,8 +161,9 @@ namespace RPG.Managers
             _closed             = true;
             _writeThreadRunning = false;
             _writeEvent.Set();
-            _writeThread?.Join(3000);
+            _writeThread?.Join(WRITE_THREAD_JOIN_MS);
             lock (_dbLock) { _db?.Close(); _db = null; }
+            Debug.Log("[DatabaseManager] Banco fechado.");
 #endif
         }
 
@@ -269,18 +187,18 @@ namespace RPG.Managers
                 _db.CreateTable<CharacterRow>();
                 _db.CreateTable<InventoryRow>();
                 _db.CreateTable<GemLoadoutRow>();
-                _db.CreateTable<EquippedItemRow>(); // NOVO v11
+                _db.CreateTable<EquippedItemRow>();
                 _db.CreateTable<EconomyLogRow>();
 
-                Debug.Log("[DatabaseManager] Banco inicializado com sucesso.");
+                Debug.Log("[DatabaseManager] Banco inicializado.");
             }
             catch (Exception e)
             {
-                Debug.LogError($"[DatabaseManager] ERRO CRÍTICO ao inicializar banco: {e}");
+                Debug.LogError($"[DatabaseManager] ERRO ao inicializar banco: {e}");
             }
         }
 
-        // ── Thread de escrita assíncrona ───────────────────────────────────
+        // ── Thread de escrita ──────────────────────────────────────────────
 
         private void StartWriteThread()
         {
@@ -299,26 +217,30 @@ namespace RPG.Managers
             {
                 _writeEvent.Wait(500);
                 _writeEvent.Reset();
-                while (_writeQueue.TryDequeue(out Action action))
-                {
-                    try   { action(); }
-                    catch (Exception e) { Debug.LogError($"[DB] Write thread erro: {e.Message}"); }
-                }
+                DrainQueue();
             }
+            // Flush final ao encerrar
+            DrainQueue();
+        }
+
+        private void DrainQueue()
+        {
             while (_writeQueue.TryDequeue(out Action action))
             {
-                try { action(); } catch { }
+                try   { action(); }
+                catch (Exception e) { Debug.LogError($"[DB] Write thread erro: {e.Message}"); }
             }
         }
 
         private void EnqueueWrite(Action writeAction)
         {
+            if (writeAction == null) return;
             _writeQueue.Enqueue(writeAction);
             _writeEvent.Set();
         }
 
         // ══════════════════════════════════════════════════════════════════
-        // CONTAS
+        // Contas
         // ══════════════════════════════════════════════════════════════════
 
         public bool AccountExists(string username)
@@ -369,9 +291,9 @@ namespace RPG.Managers
 
         public AccountData TryLoginWithSignedHash(string username, string clientSignedHash, string sessionNonce)
         {
-            if (string.IsNullOrWhiteSpace(username)         ||
-                string.IsNullOrWhiteSpace(clientSignedHash) ||
-                string.IsNullOrWhiteSpace(sessionNonce))
+            if (string.IsNullOrWhiteSpace(username)
+                || string.IsNullOrWhiteSpace(clientSignedHash)
+                || string.IsNullOrWhiteSpace(sessionNonce))
                 return null;
 
             try
@@ -386,18 +308,16 @@ namespace RPG.Managers
 
                 if (row == null)
                 {
-                    System.Threading.Thread.Sleep(UnityEngine.Random.Range(40, 80));
+                    // Pequeno delay para nivelar com o tempo de validação real
+                    // (mitiga timing attacks que distinguem "user inexistente" vs "senha errada")
+                    Thread.Sleep(UnityEngine.Random.Range(40, 80));
                     return null;
                 }
 
                 bool valid = GameManager.ValidateLoginWithNonce(
                     row.PasswordHash, clientSignedHash, sessionNonce);
 
-                if (!valid)
-                {
-                    Debug.LogWarning($"[DB] TryLoginWithSignedHash: senha incorreta para '{username}'.");
-                    return null;
-                }
+                if (!valid) return null;
 
                 UpdateLastLogin(row.Username);
 
@@ -413,14 +333,6 @@ namespace RPG.Managers
                 Debug.LogError($"[DB] TryLoginWithSignedHash: {e.Message}");
                 return null;
             }
-        }
-
-        [Obsolete("Use TryLoginWithSignedHash — vulnerável a replay attacks sem nonce.")]
-        public AccountData TryLoginWithHash(string username, string clientPasswordHash)
-        {
-            Debug.LogError($"[DB] TryLoginWithHash LEGADO chamado para '{username}'! " +
-                           "Este método é inseguro. Use TryLoginWithSignedHash.");
-            return null;
         }
 
         private void UpdateLastLogin(string username)
@@ -441,7 +353,7 @@ namespace RPG.Managers
         }
 
         // ══════════════════════════════════════════════════════════════════
-        // PERSONAGENS
+        // Personagens
         // ══════════════════════════════════════════════════════════════════
 
         public List<CharacterData> LoadCharacters(string username)
@@ -467,7 +379,7 @@ namespace RPG.Managers
             try
             {
                 CharacterRow row;
-                lock (_dbLock) { row = _db.Find<CharacterRow>(characterId); }
+                lock (_dbLock) row = _db.Find<CharacterRow>(characterId);
                 return row != null ? RowToCharacterData(row) : null;
             }
             catch (Exception e) { Debug.LogError($"[DB] LoadCharacter: {e.Message}"); return null; }
@@ -568,8 +480,10 @@ namespace RPG.Managers
         {
             if (ch == null || string.IsNullOrWhiteSpace(ch.CharacterId)) return;
 
+            // Captura todos os campos como locais para evitar race conditions
+            // (a action vai rodar em outra thread; não pode acessar ch livremente)
             string charId  = ch.CharacterId;
-            string uname   = username.Trim();
+            string uname   = username?.Trim() ?? "";
             int    level   = ch.Level;
             long   exp     = ch.Experience;
             long   expNext = ch.ExperienceToNextLevel;
@@ -619,7 +533,7 @@ namespace RPG.Managers
         }
 
         // ══════════════════════════════════════════════════════════════════
-        // INVENTÁRIO
+        // Inventário
         // ══════════════════════════════════════════════════════════════════
 
         public List<InventoryRow> LoadInventory(string characterId)
@@ -630,15 +544,23 @@ namespace RPG.Managers
                     return _db.Query<InventoryRow>(
                         "SELECT * FROM inventory WHERE character_id = ? AND is_equipped = 0", characterId);
             }
-            catch (Exception e) { Debug.LogError($"[DB] LoadInventory: {e.Message}"); return new List<InventoryRow>(); }
+            catch (Exception e)
+            {
+                Debug.LogError($"[DB] LoadInventory: {e.Message}");
+                return new List<InventoryRow>();
+            }
         }
 
-        public void SaveInventory(string characterId, string username, List<RPG.Data.InventorySlotData> slots)
+        /// <summary>
+        /// DELETE + INSERT em massa dentro de uma transação.
+        /// Antes não era transacional: crash entre o DELETE e os INSERTs perdia inventário.
+        /// </summary>
+        public void SaveInventory(string characterId, string username, List<InventorySlotData> slots)
         {
             if (string.IsNullOrWhiteSpace(characterId)) return;
 
             string charId = characterId;
-            var copy = new List<RPG.Data.InventorySlotData>(slots);
+            var copy = new List<InventorySlotData>(slots);
 
             EnqueueWrite(() =>
             {
@@ -646,19 +568,25 @@ namespace RPG.Managers
                 {
                     lock (_dbLock)
                     {
-                        _db.Execute("DELETE FROM inventory WHERE character_id = ? AND is_equipped = 0", charId);
-                        foreach (var slot in copy)
+                        _db.RunInTransaction(() =>
                         {
-                            if (string.IsNullOrEmpty(slot.ItemId)) continue;
-                            _db.Insert(new InventoryRow
+                            _db.Execute(
+                                "DELETE FROM inventory WHERE character_id = ? AND is_equipped = 0",
+                                charId);
+
+                            foreach (var slot in copy)
                             {
-                                CharacterId = charId,
-                                ItemId      = slot.ItemId,
-                                Quantity    = slot.Quantity,
-                                SlotIndex   = slot.SlotIndex,
-                                IsEquipped  = false
-                            });
-                        }
+                                if (string.IsNullOrEmpty(slot.ItemId)) continue;
+                                _db.Insert(new InventoryRow
+                                {
+                                    CharacterId = charId,
+                                    ItemId      = slot.ItemId,
+                                    Quantity    = slot.Quantity,
+                                    SlotIndex   = slot.SlotIndex,
+                                    IsEquipped  = false
+                                });
+                            }
+                        });
                     }
                 }
                 catch (Exception e) { Debug.LogError($"[DB] SaveInventory: {e.Message}"); }
@@ -686,7 +614,7 @@ namespace RPG.Managers
         }
 
         // ══════════════════════════════════════════════════════════════════
-        // GEM LOADOUT
+        // Gem Loadout
         // ══════════════════════════════════════════════════════════════════
 
         public PowerGemLoadout LoadGemLoadout(string characterId)
@@ -695,9 +623,7 @@ namespace RPG.Managers
             try
             {
                 GemLoadoutRow row;
-                lock (_dbLock)
-                    row = _db.Find<GemLoadoutRow>(characterId);
-
+                lock (_dbLock) row = _db.Find<GemLoadoutRow>(characterId);
                 if (row == null) return new PowerGemLoadout();
 
                 return new PowerGemLoadout
@@ -708,7 +634,11 @@ namespace RPG.Managers
                     SlotR = row.SlotR ?? ""
                 };
             }
-            catch (Exception e) { Debug.LogError($"[DB] LoadGemLoadout: {e.Message}"); return new PowerGemLoadout(); }
+            catch (Exception e)
+            {
+                Debug.LogError($"[DB] LoadGemLoadout: {e.Message}");
+                return new PowerGemLoadout();
+            }
         }
 
         public void SaveGemLoadout(string characterId, PowerGemLoadout loadout)
@@ -726,26 +656,20 @@ namespace RPG.Managers
                 try
                 {
                     lock (_dbLock)
-                    {
                         _db.InsertOrReplace(new GemLoadoutRow
                         {
                             CharacterId = charId,
                             SlotQ = q, SlotW = w, SlotE = e, SlotR = r
                         });
-                    }
                 }
                 catch (Exception ex) { Debug.LogError($"[DB] SaveGemLoadout: {ex.Message}"); }
             });
         }
 
         // ══════════════════════════════════════════════════════════════════
-        // EQUIPAMENTOS — NOVO v11
+        // Equipamentos
         // ══════════════════════════════════════════════════════════════════
 
-        /// <summary>
-        /// Carrega a lista de itens equipados de um personagem.
-        /// Retorna lista vazia se o personagem não tem nada equipado.
-        /// </summary>
         public List<EquippedItemRow> LoadEquipped(string characterId)
         {
             if (string.IsNullOrWhiteSpace(characterId)) return new List<EquippedItemRow>();
@@ -762,20 +686,12 @@ namespace RPG.Managers
             }
         }
 
-        /// <summary>
-        /// Persiste a lista completa de itens equipados.
-        /// Estratégia: DELETE + INSERT em massa dentro de uma transação para
-        /// garantir atomicidade. Se o servidor crashar no meio, ou tudo é
-        /// salvo ou nada é alterado.
-        ///
-        /// Chamado por NetworkInventory.ServerSaveAll → ServerSaveCharacterForced.
-        /// </summary>
-        public void SaveEquipped(string characterId, List<RPG.Data.EquippedItemData> equipped)
+        public void SaveEquipped(string characterId, List<EquippedItemData> equipped)
         {
             if (string.IsNullOrWhiteSpace(characterId)) return;
 
             string charId = characterId;
-            var copy = new List<RPG.Data.EquippedItemData>(equipped);
+            var copy = new List<EquippedItemData>(equipped);
 
             EnqueueWrite(() =>
             {
@@ -790,7 +706,6 @@ namespace RPG.Managers
                             foreach (var item in copy)
                             {
                                 if (string.IsNullOrEmpty(item.ItemId)) continue;
-
                                 _db.Insert(new EquippedItemRow
                                 {
                                     CharacterId   = charId,
@@ -808,7 +723,7 @@ namespace RPG.Managers
         }
 
         // ══════════════════════════════════════════════════════════════════
-        // LOG DE ECONOMIA
+        // Log de economia
         // ══════════════════════════════════════════════════════════════════
 
         public void LogEconomy(string characterId, string eventType, float value)
@@ -867,25 +782,23 @@ namespace RPG.Managers
 
 #else
         // ── Stubs cliente/editor ───────────────────────────────────────────
-        public bool                    AccountExists(string u)                                                     => false;
-        public string                  TryCreateAccount(string u, string h)                                        => null;
-        public AccountData             TryLoginWithSignedHash(string u, string sh, string n)                       => null;
-        [Obsolete("Use TryLoginWithSignedHash")]
-        public AccountData             TryLoginWithHash(string u, string h)                                        => null;
-        public List<CharacterData>     LoadCharacters(string u)                                                    => new List<CharacterData>();
-        public CharacterData           LoadCharacter(string id)                                                    => null;
-        public CharacterData           LoadCharacterForAccount(string id, string u)                                => null;
-        public List<CharacterData>     GetCharactersInMap(string m)                                                => new List<CharacterData>();
-        public string                  TryCreateCharacter(string u, string n, CharacterRace r)                     => null;
-        public void                    SaveCharacter(CharacterData ch, string u)                                   { }
-        public List<InventoryRow>      LoadInventory(string id)                                                    => new List<InventoryRow>();
-        public void                    SaveInventory(string cid, string u, List<RPG.Data.InventorySlotData> slots) { }
-        public void                    AddItem(string id, string item, int qty = 1, int slot = -1)                 { }
-        public PowerGemLoadout         LoadGemLoadout(string id)                                                   => new PowerGemLoadout();
-        public void                    SaveGemLoadout(string id, PowerGemLoadout l)                                { }
-        public List<EquippedItemRow>   LoadEquipped(string id)                                                     => new List<EquippedItemRow>();
-        public void                    SaveEquipped(string id, List<RPG.Data.EquippedItemData> eq)                 { }
-        public void                    LogEconomy(string id, string ev, float v)                                   { }
+        public bool                  AccountExists(string u) => false;
+        public string                TryCreateAccount(string u, string h) => null;
+        public AccountData           TryLoginWithSignedHash(string u, string sh, string n) => null;
+        public List<CharacterData>   LoadCharacters(string u) => new List<CharacterData>();
+        public CharacterData         LoadCharacter(string id) => null;
+        public CharacterData         LoadCharacterForAccount(string id, string u) => null;
+        public List<CharacterData>   GetCharactersInMap(string m) => new List<CharacterData>();
+        public string                TryCreateCharacter(string u, string n, CharacterRace r) => null;
+        public void                  SaveCharacter(CharacterData ch, string u) { }
+        public List<InventoryRow>    LoadInventory(string id) => new List<InventoryRow>();
+        public void                  SaveInventory(string cid, string u, List<InventorySlotData> slots) { }
+        public void                  AddItem(string id, string item, int qty = 1, int slot = -1) { }
+        public PowerGemLoadout       LoadGemLoadout(string id) => new PowerGemLoadout();
+        public void                  SaveGemLoadout(string id, PowerGemLoadout l) { }
+        public List<EquippedItemRow> LoadEquipped(string id) => new List<EquippedItemRow>();
+        public void                  SaveEquipped(string id, List<EquippedItemData> eq) { }
+        public void                  LogEconomy(string id, string ev, float v) { }
 #endif
     }
 }

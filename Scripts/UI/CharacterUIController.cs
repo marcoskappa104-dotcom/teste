@@ -8,35 +8,31 @@ using RPG.Network;
 namespace RPG.UI
 {
     /// <summary>
-    /// CharacterUIController v4
-    ///
-    /// CORREÇÃO v4:
-    ///   SetAllButtonsInteractable(bool value) não passava o parâmetro 'value'
-    ///   para os slots de personagem — sempre chamava SetInteractable(false),
-    ///   impedindo re-habilitar os botões após um erro de seleção.
-    ///
-    ///   Agora o valor correto é propagado para todos os botões.
+    /// Tela de seleção/criação de personagem.
+    /// Comunica-se com ClientAuthHandler para listar, criar e selecionar.
     /// </summary>
     public class CharacterUIController : MonoBehaviour
     {
-        [Header("Panels")]
+        [Header("Painéis")]
         [SerializeField] private GameObject selectionPanel;
         [SerializeField] private GameObject creationPanel;
 
-        [Header("Selection Panel")]
+        [Header("Seleção")]
         [SerializeField] private Transform  characterListContent;
         [SerializeField] private GameObject characterSlotPrefab;
         [SerializeField] private Button     createNewButton;
         [SerializeField] private Button     logoutButton;
         [SerializeField] private TMP_Text   selectionStatusText;
 
-        [Header("Creation Panel")]
+        [Header("Criação")]
         [SerializeField] private TMP_InputField nameInput;
         [SerializeField] private TMP_Dropdown   raceDropdown;
         [SerializeField] private TMP_Text       raceInfoText;
         [SerializeField] private Button         createButton;
         [SerializeField] private Button         backButton;
         [SerializeField] private TMP_Text       errorText;
+
+        private const int MIN_NAME_LENGTH = 2;
 
         private List<CharacterSummary> _cachedCharacters = new();
 
@@ -55,13 +51,13 @@ namespace RPG.UI
 
             if (ClientAuthHandler.Instance != null)
             {
-                ClientAuthHandler.Instance.OnCharacterListReceived  += HandleCharacterList;
-                ClientAuthHandler.Instance.OnCreateCharacterResult  += HandleCreateCharacterResult;
-                ClientAuthHandler.Instance.OnSelectCharacterResult  += HandleSelectCharacterResult;
+                ClientAuthHandler.Instance.OnCharacterListReceived += HandleCharacterList;
+                ClientAuthHandler.Instance.OnCreateCharacterResult += HandleCreateCharacterResult;
+                ClientAuthHandler.Instance.OnSelectCharacterResult += HandleSelectCharacterResult;
             }
             else
             {
-                Debug.LogWarning("[CharacterUI] ClientAuthHandler não encontrado!");
+                Debug.LogWarning("[CharacterUI] ClientAuthHandler não encontrado.");
                 SetSelectionStatus("Erro: sem conexão com servidor.");
             }
         }
@@ -70,13 +66,15 @@ namespace RPG.UI
         {
             if (ClientAuthHandler.Instance != null)
             {
-                ClientAuthHandler.Instance.OnCharacterListReceived  -= HandleCharacterList;
-                ClientAuthHandler.Instance.OnCreateCharacterResult  -= HandleCreateCharacterResult;
-                ClientAuthHandler.Instance.OnSelectCharacterResult  -= HandleSelectCharacterResult;
+                ClientAuthHandler.Instance.OnCharacterListReceived -= HandleCharacterList;
+                ClientAuthHandler.Instance.OnCreateCharacterResult -= HandleCreateCharacterResult;
+                ClientAuthHandler.Instance.OnSelectCharacterResult -= HandleSelectCharacterResult;
             }
         }
 
-        // ── Seleção ────────────────────────────────────────────────────────
+        // ══════════════════════════════════════════════════════════════════
+        // Seleção
+        // ══════════════════════════════════════════════════════════════════
 
         private void ShowSelectionPanel()
         {
@@ -124,19 +122,20 @@ namespace RPG.UI
             if (!success)
             {
                 SetSelectionStatus($"Erro: {error}");
-                // CORREÇÃO: passa 'true' para re-habilitar os botões após erro
                 SetAllButtonsInteractable(true);
             }
-            // Se success: ClientAuthHandler carregou GameplayScene — esta cena some.
+            // Se success: o ClientAuthHandler troca de cena (esta UI some)
         }
 
-        // ── Criação ────────────────────────────────────────────────────────
+        // ══════════════════════════════════════════════════════════════════
+        // Criação
+        // ══════════════════════════════════════════════════════════════════
 
         private void ShowCreationPanel()
         {
             selectionPanel.SetActive(false);
             creationPanel.SetActive(true);
-            nameInput.text     = "";
+            nameInput.text = "";
             if (errorText) errorText.text = "";
             raceDropdown.value = 0;
             UpdateRaceInfo();
@@ -147,9 +146,9 @@ namespace RPG.UI
             if (errorText) errorText.text = "";
             string charName = nameInput.text.Trim();
 
-            if (charName.Length < 2)
+            if (charName.Length < MIN_NAME_LENGTH)
             {
-                if (errorText) errorText.text = "Nome: mínimo 2 caracteres.";
+                if (errorText) errorText.text = $"Nome: mínimo {MIN_NAME_LENGTH} caracteres.";
                 return;
             }
 
@@ -171,7 +170,9 @@ namespace RPG.UI
             ShowSelectionPanel();
         }
 
-        // ── Race Dropdown ──────────────────────────────────────────────────
+        // ══════════════════════════════════════════════════════════════════
+        // Race Dropdown
+        // ══════════════════════════════════════════════════════════════════
 
         private void PopulateRaceDropdown()
         {
@@ -196,11 +197,11 @@ namespace RPG.UI
             };
         }
 
-        // ── Logout ─────────────────────────────────────────────────────────
+        // ══════════════════════════════════════════════════════════════════
+        // Logout / Helpers
+        // ══════════════════════════════════════════════════════════════════
 
         private void OnLogout() => Managers.GameManager.Instance?.Logout();
-
-        // ── Helpers ────────────────────────────────────────────────────────
 
         private void SetSelectionStatus(string msg)
         {
@@ -208,23 +209,18 @@ namespace RPG.UI
         }
 
         /// <summary>
-        /// CORREÇÃO v4: propaga o parâmetro 'value' corretamente para os slots.
-        /// Antes sempre passava 'false', impedindo re-habilitar após erro.
+        /// Propaga corretamente o valor para todos os slots.
+        /// (Bug original: hardcoded false impedia re-habilitar após erro.)
         /// </summary>
         private void SetAllButtonsInteractable(bool value)
         {
             foreach (Transform child in characterListContent)
-                child.GetComponent<Button>()?.SetInteractable(value); // CORRIGIDO: era false hardcoded
+            {
+                var btn = child.GetComponent<Button>();
+                if (btn != null) btn.interactable = value;
+            }
             if (createNewButton) createNewButton.interactable = value;
             if (logoutButton)    logoutButton.interactable    = value;
-        }
-    }
-
-    public static class ButtonExtensions
-    {
-        public static void SetInteractable(this Button btn, bool value)
-        {
-            if (btn != null) btn.interactable = value;
         }
     }
 }

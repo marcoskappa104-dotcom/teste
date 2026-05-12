@@ -1,6 +1,5 @@
 using System;
 using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.AI;
 using Mirror;
@@ -14,6 +13,9 @@ namespace RPG.Combat
     public enum SkillType   { Physical, Magical, Heal, Buff }
     public enum SkillTarget { Enemy, Self, Ally }
 
+    /// <summary>
+    /// Definição de uma skill. Embedada em ItemData de PowerGem.
+    /// </summary>
     [Serializable]
     public class SkillData
     {
@@ -24,43 +26,39 @@ namespace RPG.Combat
         public float       ManaCost      = 10f;
         public float       Range         = 4f;
         public float       AtkMultiplier = 1.0f;
+
         /// <summary>
         /// Tempo base de cast em segundos. 0 = instantâneo.
-        /// O tempo efetivo é reduzido pelo CastSpeed do personagem:
-        ///   effectiveCastTime = CastTime / (1 + CastSpeed/100)
+        /// Reduzido em runtime pelo CastSpeed do caster:
+        ///   effective = base / (1 + CastSpeed/100)
         /// </summary>
-        public float       CastTime      = 0f;
-        public string      AnimTrigger   = "Attack";
-        public Sprite      Icon;
+        public float CastTime = 0f;
+
+        public string AnimTrigger = "Attack";
+        public Sprite Icon;
     }
 
     /// <summary>
-    /// SkillSystem v10
+    /// Gerencia a barra de skills do jogador local: hotkeys, cooldown visual,
+    /// walk-to-range, cast (canal) e envio de comandos ao servidor.
     ///
-    /// CORREÇÕES v10:
-    ///
-    ///   NOVO — CastTime agora é reduzido pelo CastSpeed do personagem:
-    ///     Se uma skill tem CastTime=2.0s e o player tem CastSpeed=50,
-    ///     effectiveCastTime = 2.0 / (1 + 50/100) = 2.0/1.5 = 1.33s.
-    ///     O personagem fica parado durante o cast (canal), então o
-    ///     WalkThenSendCmd aguarda o cast antes de continuar.
-    ///
-    ///   NOVO — CastBar UI notificada via evento OnCastStarted/OnCastProgress/OnCastFinished.
-    ///     A UIManager pode se inscrever para exibir uma barra de cast.
-    ///
-    ///   Todas as correções v9 mantidas.
+    /// Toda autoridade fica no servidor — este script é apenas UX/predição.
     /// </summary>
     [RequireComponent(typeof(PlayerEntity))]
     public class SkillSystem : NetworkBehaviour
     {
-        [Header("Debug — desative em builds de produção")]
+        [Header("Debug")]
         [SerializeField] private bool debugLogs = false;
 
-        private const float CMD_MOVE_INTERVAL = 0.15f;
-        private const float WALK_TIMEOUT      = 15f;
+        // Tuning — alinhado com BasicAttackSystem
+        private const int   MAX_SKILLS         = 4;
+        private const float CMD_MOVE_INTERVAL  = 0.15f;
+        private const float WALK_TIMEOUT       = 15f;
         private const float WALK_DEST_FRACTION = 0.85f;
         private const float RANGE_CHECK_MARGIN = 1.05f;
         private const float WALK_STOP_DIST     = 0.2f;
+        private const float IDLE_STOP_DIST     = 0.5f;
+        private const float INSTANT_CAST_EPS   = 0.05f;
 
         // ── Componentes ────────────────────────────────────────────────────
         private PlayerEntity            _player;
@@ -68,12 +66,13 @@ namespace RPG.Combat
         private NavMeshAgent            _agent;
         private NetworkPlayerController _controller;
         private NetworkInventory        _inventory;
+        private NetworkPlayer           _netPlayer;
+        private NetworkIdentity         _identity;
 
         // ── Cooldown visual ────────────────────────────────────────────────
-        private const int MAX_SKILLS = 4;
         private readonly float[] _uiCooldownTimers = new float[MAX_SKILLS];
 
-        // ── Walk-to-range state ────────────────────────────────────────────
+        // ── Estado de walk-to-range e cast ────────────────────────────────
         private Coroutine   _walkCoroutine;
         private Coroutine   _castCoroutine;
         private bool        _hasPendingWalk;
@@ -82,20 +81,20 @@ namespace RPG.Combat
         private float       _lastCmdMoveTime;
 
         // ── Eventos para a UI ──────────────────────────────────────────────
-        public event Action<int, float>  OnCooldownStarted;
-        public event Action<int>         OnSkillFired;
-        public event Action              OnSkillBarNeedsRefresh;
-        /// <summary>Disparado quando um cast começa. Parâmetros: skillName, castDuration.</summary>
+        public event Action<int, float>    OnCooldownStarted;
+        public event Action<int>           OnSkillFired;
+        public event Action                OnSkillBarNeedsRefresh;
         public event Action<string, float> OnCastStarted;
-        /// <summary>Disparado a cada frame durante o cast. Parâmetro: progresso 0-1.</summary>
         public event Action<float>         OnCastProgress;
-        /// <summary>Disparado quando o cast termina (sucesso ou cancelamento).</summary>
         public event Action                OnCastFinished;
 
         public bool HasPendingAction => _hasPendingWalk || _isCasting;
         public bool IsCasting        => _isCasting;
+        public int  SkillCount       => MAX_SKILLS;
 
-        // ── Lifecycle ──────────────────────────────────────────────────────
+        // ══════════════════════════════════════════════════════════════════
+        // Lifecycle
+        // ══════════════════════════════════════════════════════════════════
 
         private void Awake()
         {
@@ -104,6 +103,8 @@ namespace RPG.Combat
             _agent      = GetComponent<NavMeshAgent>();
             _controller = GetComponent<NetworkPlayerController>();
             _inventory  = GetComponent<NetworkInventory>();
+            _netPlayer  = GetComponent<NetworkPlayer>();
+            _identity   = GetComponent<NetworkIdentity>();
         }
 
         public override void OnStartLocalPlayer()
@@ -125,17 +126,18 @@ namespace RPG.Combat
         {
             if (!isLocalPlayer) return;
             OnSkillBarNeedsRefresh?.Invoke();
-            Log("Loadout de joias atualizado — SkillBar notificada.");
         }
 
         private void Update()
         {
             if (!isLocalPlayer) return;
 
+            // Decremento de cooldowns visuais
             for (int i = 0; i < MAX_SKILLS; i++)
                 if (_uiCooldownTimers[i] > 0f)
                     _uiCooldownTimers[i] -= Time.deltaTime;
 
+            // Cancela ações pendentes se o player morreu
             if ((_hasPendingWalk || _isCasting) && _player.IsDead)
             {
                 CancelPendingWalk();
@@ -143,25 +145,25 @@ namespace RPG.Combat
                 return;
             }
 
+            // Cancela walk se o alvo se tornou inválido
             if (_hasPendingWalk && !IsTargetValid(_pendingTarget))
                 CancelPendingWalk();
         }
 
-        // ── Propriedades públicas ──────────────────────────────────────────
-
-        public int SkillCount => MAX_SKILLS;
+        // ══════════════════════════════════════════════════════════════════
+        // API pública
+        // ══════════════════════════════════════════════════════════════════
 
         public SkillData GetSkill(int index)
         {
             if (index < 0 || index >= MAX_SKILLS) return null;
-            if (_inventory == null) return null;
-            return _inventory.GetEquippedSkill(index);
+            return _inventory?.GetEquippedSkill(index);
         }
 
-        public float GetUICooldown(int i)  => (i >= 0 && i < MAX_SKILLS) ? Mathf.Max(0f, _uiCooldownTimers[i]) : 0f;
-        public bool  IsOnUICooldown(int i) => GetUICooldown(i) > 0f;
+        public float GetUICooldown(int i)
+            => (i >= 0 && i < MAX_SKILLS) ? Mathf.Max(0f, _uiCooldownTimers[i]) : 0f;
 
-        // ── TryUseSkill ────────────────────────────────────────────────────
+        public bool IsOnUICooldown(int i) => GetUICooldown(i) > 0f;
 
         public void TryUseSkill(int index)
         {
@@ -182,43 +184,37 @@ namespace RPG.Combat
                 return;
             }
 
-            var target = _player.CurrentTarget;
-
-            if (skill.Target == SkillTarget.Enemy)
-            {
-                if (target == null)
-                {
-                    UIManager.Instance?.ShowMessage("Selecione um alvo primeiro!");
-                    return;
-                }
-                if (!IsTargetValid(target))
-                {
-                    UIManager.Instance?.ShowMessage("Alvo já está morto!");
-                    _player.ClearTarget();
-                    UIManager.Instance?.ClearTargetPanel();
-                    return;
-                }
-            }
-
             CancelPendingWalk();
 
-            // Skills de self/heal/buff não precisam de alvo e ignoram cast time de aproximação
-            if (skill.Target == SkillTarget.Self || skill.Type == SkillType.Heal || skill.Type == SkillType.Buff)
+            // Self/buff/heal: ignora alvo
+            if (skill.Target == SkillTarget.Self
+                || skill.Type == SkillType.Heal
+                || skill.Type == SkillType.Buff)
             {
                 StartCastAndSend(index, skill, null, isSelf: true);
                 return;
             }
 
-            float dist = target != null ? Vector3.Distance(transform.position, target.Position) : 0f;
+            // Skills com alvo: precisa de alvo vivo
+            var target = _player.CurrentTarget;
+            if (target == null)
+            {
+                UIManager.Instance?.ShowMessage("Selecione um alvo primeiro!");
+                return;
+            }
+            if (!IsTargetValid(target))
+            {
+                UIManager.Instance?.ShowMessage("Alvo já está morto!");
+                _player.ClearTarget();
+                UIManager.Instance?.ClearTargetPanel();
+                return;
+            }
+
+            float dist = Vector3.Distance(transform.position, target.Position);
 
             if (dist <= skill.Range * RANGE_CHECK_MARGIN)
             {
-                // Já no range: para e começa o cast
-                if (_agent != null && _agent.isOnNavMesh)
-                {
-                    _agent.ResetPath();
-                    _agent.stoppingDistance = 0.5f;
-                }
+                StopAgent();
                 StartCastAndSend(index, skill, target, isSelf: false);
             }
             else
@@ -228,94 +224,6 @@ namespace RPG.Combat
                 _pendingTarget   = target;
                 _lastCmdMoveTime = -CMD_MOVE_INTERVAL;
                 _walkCoroutine   = StartCoroutine(WalkThenSendCmd(index, skill, target));
-            }
-        }
-
-        /// <summary>
-        /// Inicia o canal de cast (se CastTime > 0) e envia o Command ao servidor.
-        /// Se CastTime = 0, envia imediatamente.
-        /// CastSpeed do personagem reduz o CastTime efetivo.
-        /// </summary>
-        private void StartCastAndSend(int index, SkillData skill, ITargetable target, bool isSelf)
-        {
-            // Calcula cast time efetivo considerando CastSpeed do personagem
-            float effectiveCastTime = 0f;
-            if (skill.CastTime > 0f && _player.Stats != null)
-            {
-                effectiveCastTime = StatsCalculator.CalculateEffectiveCastTime(
-                    skill.CastTime, _player.Stats.CastSpeed);
-            }
-
-            if (effectiveCastTime <= 0.05f)
-            {
-                // Cast instantâneo
-                if (isSelf)
-                    SendSelfSkillCmd(index);
-                else
-                    SendSkillCmd(index, target, skill.Type == SkillType.Physical);
-            }
-            else
-            {
-                // Cast com tempo
-                if (_castCoroutine != null) StopCoroutine(_castCoroutine);
-                _castCoroutine = StartCoroutine(CastSequence(index, skill, target, isSelf, effectiveCastTime));
-            }
-        }
-
-        /// <summary>
-        /// Coroutine de canal de cast. Exibe progresso via eventos de UI.
-        /// Se o player se mover ou o alvo morrer, o cast é cancelado.
-        /// </summary>
-        private IEnumerator CastSequence(int index, SkillData skill, ITargetable target, bool isSelf, float castTime)
-        {
-            _isCasting = true;
-            OnCastStarted?.Invoke(skill.Name, castTime);
-
-            // Para o agente durante o cast
-            if (_agent != null && _agent.isOnNavMesh)
-            {
-                _agent.ResetPath();
-                _agent.velocity = Vector3.zero;
-            }
-
-            if (!string.IsNullOrEmpty(skill.AnimTrigger))
-                _animator?.SetTrigger("CastStart");
-
-            float elapsed = 0f;
-            while (elapsed < castTime)
-            {
-                elapsed += Time.deltaTime;
-
-                // Cancela cast se morreu ou alvo inválido
-                if (_player.IsDead)
-                {
-                    Log("Cast cancelado: player morreu.");
-                    break;
-                }
-                if (!isSelf && !IsTargetValid(target))
-                {
-                    Log("Cast cancelado: alvo morreu.");
-                    UIManager.Instance?.ShowMessage("Alvo inválido — cast cancelado.");
-                    break;
-                }
-
-                OnCastProgress?.Invoke(elapsed / castTime);
-                yield return null;
-            }
-
-            bool success = elapsed >= castTime && !_player.IsDead;
-            success = success && (isSelf || IsTargetValid(target));
-
-            _isCasting     = false;
-            _castCoroutine = null;
-            OnCastFinished?.Invoke();
-
-            if (success)
-            {
-                if (isSelf)
-                    SendSelfSkillCmd(index);
-                else
-                    SendSkillCmd(index, target, skill.Type == SkillType.Physical);
             }
         }
 
@@ -343,14 +251,97 @@ namespace RPG.Combat
             _hasPendingWalk = false;
             _pendingTarget  = null;
 
-            if (_agent != null && _agent.isOnNavMesh)
+            StopAgent();
+        }
+
+        /// <summary>Confirmação do servidor: aplica cooldown visual e dispara eventos.</summary>
+        public void OnServerSkillConfirmed(int skillIndex, float cooldownDuration)
+        {
+            if (skillIndex < 0 || skillIndex >= MAX_SKILLS) return;
+            _uiCooldownTimers[skillIndex] = cooldownDuration;
+            OnCooldownStarted?.Invoke(skillIndex, cooldownDuration);
+            OnSkillFired?.Invoke(skillIndex);
+            Log($"Skill {skillIndex} confirmada. Cooldown: {cooldownDuration:0.0}s");
+        }
+
+        public void OnServerSkillRejected(int skillIndex, string reason)
+        {
+            UIManager.Instance?.ShowMessage(reason);
+            Log($"Skill {skillIndex} rejeitada: {reason}");
+        }
+
+        // ══════════════════════════════════════════════════════════════════
+        // Cast (canal)
+        // ══════════════════════════════════════════════════════════════════
+
+        private void StartCastAndSend(int index, SkillData skill, ITargetable target, bool isSelf)
+        {
+            float effectiveCastTime = 0f;
+            if (skill.CastTime > 0f && _player.Stats != null)
             {
-                _agent.stoppingDistance = 0.5f;
-                _agent.ResetPath();
+                effectiveCastTime = StatsCalculator.CalculateEffectiveCastTime(
+                    skill.CastTime, _player.Stats.CastSpeed);
+            }
+
+            if (effectiveCastTime <= INSTANT_CAST_EPS)
+            {
+                // Cast instantâneo
+                if (isSelf) SendSelfSkillCmd(index);
+                else        SendSkillCmd(index, target, skill.Type == SkillType.Physical);
+                return;
+            }
+
+            // Cast com tempo
+            if (_castCoroutine != null) StopCoroutine(_castCoroutine);
+            _castCoroutine = StartCoroutine(CastSequence(index, skill, target, isSelf, effectiveCastTime));
+        }
+
+        private IEnumerator CastSequence(int index, SkillData skill, ITargetable target,
+                                         bool isSelf, float castTime)
+        {
+            _isCasting = true;
+            OnCastStarted?.Invoke(skill.Name, castTime);
+
+            // Para o agent durante o cast (não move enquanto canaliza)
+            StopAgent();
+
+            if (!string.IsNullOrEmpty(skill.AnimTrigger))
+                _animator?.SetTrigger("CastStart");
+
+            float elapsed = 0f;
+            bool  cancelled = false;
+
+            while (elapsed < castTime)
+            {
+                elapsed += Time.deltaTime;
+
+                if (_player.IsDead) { Log("Cast cancelado: player morreu."); cancelled = true; break; }
+                if (!isSelf && !IsTargetValid(target))
+                {
+                    Log("Cast cancelado: alvo morreu.");
+                    UIManager.Instance?.ShowMessage("Alvo inválido — cast cancelado.");
+                    cancelled = true;
+                    break;
+                }
+
+                OnCastProgress?.Invoke(elapsed / castTime);
+                yield return null;
+            }
+
+            _isCasting     = false;
+            _castCoroutine = null;
+            OnCastFinished?.Invoke();
+
+            if (!cancelled)
+            {
+                if (isSelf) SendSelfSkillCmd(index);
+                else        SendSkillCmd(index, target, skill.Type == SkillType.Physical);
             }
         }
 
-        // ── Walk-to-range ──────────────────────────────────────────────────
+        // ══════════════════════════════════════════════════════════════════
+        // Walk-to-range
+        // ══════════════════════════════════════════════════════════════════
 
         private IEnumerator WalkThenSendCmd(int index, SkillData skill, ITargetable target)
         {
@@ -364,51 +355,36 @@ namespace RPG.Combat
             {
                 timeout -= Time.deltaTime;
 
-                if (_player.IsDead)
-                {
-                    Log("WalkThenSendCmd: jogador morreu.");
-                    break;
-                }
+                if (_player.IsDead) { Log("Walk: player morreu."); break; }
 
                 if (!IsTargetValid(target))
                 {
                     _player.ClearTarget();
                     UIManager.Instance?.ClearTargetPanel();
-                    Log("WalkThenSendCmd: alvo inválido/morto.");
+                    Log("Walk: alvo inválido.");
                     break;
                 }
 
-                if (_player.CurrentTarget != target)
-                {
-                    Log("WalkThenSendCmd: alvo mudou.");
-                    break;
-                }
+                if (_player.CurrentTarget != target) { Log("Walk: alvo mudou."); break; }
 
                 float dist = Vector3.Distance(transform.position, target.Position);
-
                 if (dist <= effectiveRange)
                 {
-                    if (_agent != null && _agent.isOnNavMesh)
-                    {
-                        _agent.ResetPath();
-                        _agent.stoppingDistance = 0.5f;
-                        _agent.velocity         = Vector3.zero;
-                    }
-
+                    StopAgent();
                     _hasPendingWalk = false;
                     _pendingTarget  = null;
 
-                    yield return null;
+                    yield return null; // 1 frame de respiro
 
                     if (!_player.IsDead && IsTargetValid(target) && _player.CurrentTarget == target)
                     {
-                        Log($"No range ({dist:0.2}/{skill.Range:0.1}). Executando skill {index}.");
+                        Log($"Em range ({dist:0.2}/{skill.Range:0.1}). Executando skill {index}.");
                         StartCastAndSend(index, skill, target, isSelf: false);
                     }
-
                     yield break;
                 }
 
+                // Continua caminhando
                 if (_agent != null && _agent.isOnNavMesh)
                 {
                     Vector3 destination = CalculateWalkDestination(target.Position, skill.Range);
@@ -426,14 +402,9 @@ namespace RPG.Combat
             }
 
             if (timeout <= 0f)
-                Log($"WalkThenSendCmd: timeout após {WALK_TIMEOUT}s para skill {index}.");
+                Log($"Walk: timeout após {WALK_TIMEOUT}s.");
 
-            if (_agent != null && _agent.isOnNavMesh)
-            {
-                _agent.stoppingDistance = 0.5f;
-                _agent.ResetPath();
-            }
-
+            StopAgent();
             _hasPendingWalk = false;
             _pendingTarget  = null;
             _walkCoroutine  = null;
@@ -442,10 +413,9 @@ namespace RPG.Combat
         private Vector3 CalculateWalkDestination(Vector3 targetPos, float skillRange)
         {
             Vector3 toTarget = targetPos - transform.position;
-            float dist = toTarget.magnitude;
+            float   dist     = toTarget.magnitude;
 
             float safeStopDist = skillRange * WALK_DEST_FRACTION;
-
             if (dist <= safeStopDist * 0.95f)
                 return transform.position;
 
@@ -458,44 +428,45 @@ namespace RPG.Combat
             return destination;
         }
 
-        // ── Envio dos Commands ao servidor ─────────────────────────────────
+        // ══════════════════════════════════════════════════════════════════
+        // Envio de comandos ao servidor
+        // ══════════════════════════════════════════════════════════════════
 
         private void SendSkillCmd(int skillIndex, ITargetable target, bool isPhysical)
         {
             var skill = GetSkill(skillIndex);
-
-            if (_agent != null && _agent.isOnNavMesh)
-            {
-                _agent.ResetPath();
-                _agent.stoppingDistance = 0.5f;
-                _agent.velocity         = Vector3.zero;
-            }
+            StopAgent();
 
             if (_animator != null && skill != null && !string.IsNullOrEmpty(skill.AnimTrigger))
                 _animator.SetTrigger(skill.AnimTrigger);
 
-            var targetNB = target as NetworkBehaviour;
-            if (targetNB == null)
+            // Rotaciona instantaneamente para o alvo
+            if (target != null)
+            {
+                Vector3 dir = target.Position - transform.position;
+                dir.y = 0f;
+                if (dir.sqrMagnitude > 0.01f)
+                    transform.rotation = Quaternion.LookRotation(dir);
+            }
+
+            // Resolve o NetworkBehaviour subjacente
+            if (target is not NetworkBehaviour targetNB)
             {
                 Log("Alvo não é NetworkBehaviour — skill não enviada.");
                 return;
             }
 
-            Vector3 dir = target.Position - transform.position;
-            dir.y = 0f;
-            if (dir.sqrMagnitude > 0.01f)
-                transform.rotation = Quaternion.LookRotation(dir);
+            if (_identity == null) return;
+            uint attackerNetId = _identity.netId;
 
-            uint attackerNetId = GetComponent<NetworkIdentity>().netId;
-
-            var monster = targetNB.GetComponent<NetworkMonsterEntity>();
-            if (monster != null)
+            if (targetNB is NetworkMonsterEntity monster)
             {
                 monster.CmdRequestSkill(attackerNetId, skillIndex, isPhysical);
                 Log($"CmdRequestSkill → {monster.DisplayName} skill:{skillIndex}");
             }
             else
             {
+                // PvP futuro
                 if (debugLogs)
                     UIManager.Instance?.ShowMessage("PvP ainda não implementado.");
             }
@@ -503,29 +474,21 @@ namespace RPG.Combat
 
         private void SendSelfSkillCmd(int skillIndex)
         {
-            var netPlayer = GetComponent<RPG.Network.NetworkPlayer>();
-            netPlayer?.CmdRequestSelfSkill(skillIndex);
+            _netPlayer?.CmdRequestSelfSkill(skillIndex);
             Log($"CmdRequestSelfSkill skill:{skillIndex}");
         }
 
-        // ── Resultado vindo do servidor ────────────────────────────────────
+        // ══════════════════════════════════════════════════════════════════
+        // Helpers
+        // ══════════════════════════════════════════════════════════════════
 
-        public void OnServerSkillConfirmed(int skillIndex, float cooldownDuration)
+        private void StopAgent()
         {
-            if (skillIndex < 0 || skillIndex >= MAX_SKILLS) return;
-            _uiCooldownTimers[skillIndex] = cooldownDuration;
-            OnCooldownStarted?.Invoke(skillIndex, cooldownDuration);
-            OnSkillFired?.Invoke(skillIndex);
-            Log($"Skill {skillIndex} confirmada. Cooldown: {cooldownDuration:0.0}s");
+            if (_agent == null || !_agent.isOnNavMesh) return;
+            _agent.ResetPath();
+            _agent.velocity         = Vector3.zero;
+            _agent.stoppingDistance = IDLE_STOP_DIST;
         }
-
-        public void OnServerSkillRejected(int skillIndex, string reason)
-        {
-            UIManager.Instance?.ShowMessage(reason);
-            Log($"Skill {skillIndex} rejeitada: {reason}");
-        }
-
-        // ── Helpers ────────────────────────────────────────────────────────
 
         private static bool IsTargetValid(ITargetable target)
         {

@@ -1,26 +1,16 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using TMPro;
 
 namespace RPG.UI
 {
     /// <summary>
-    /// FloatingTextManager v4
+    /// Pool de textos flutuantes (dano, cura, XP, etc).
+    /// Desabilita-se automaticamente em servidor dedicado (Application.isBatchMode).
     ///
-    /// CORREÇÕES v4:
-    ///
-    ///   BUG-17 — Crashava em servidor dedicado (Application.isBatchMode):
-    ///     O servidor dedicado não tem câmera nem UI. Se o FloatingTextManager
-    ///     fosse instanciado no servidor, Show() tentava Camera.main = null
-    ///     e crashava silenciosamente.
-    ///     SOLUÇÃO: Guard no Awake() — em batch mode (servidor dedicado),
-    ///     o componente é desativado imediatamente. Show() também tem guard.
-    ///
-    ///   Todas as correções v3 mantidas:
-    ///     - Câmera cacheada globalmente (não busca todo frame).
-    ///     - Pool com tamanho mínimo de 1.
-    ///     - Câmera passada como parâmetro para ShowCoroutine (sem GC por frame).
+    /// Reseta o pool ao trocar de cena para evitar referências órfãs.
     /// </summary>
     public class FloatingTextManager : MonoBehaviour
     {
@@ -31,9 +21,9 @@ namespace RPG.UI
         [SerializeField] private float      riseSpeed = 2f;
         [SerializeField] private float      lifetime  = 1.2f;
 
-        private Queue<GameObject> _pool = new Queue<GameObject>();
-        private Camera            _cachedCamera;
-        private bool              _isServerOnly = false;
+        private readonly Queue<GameObject> _pool = new Queue<GameObject>();
+        private Camera                     _cachedCamera;
+        private bool                       _isServerOnly;
 
         private void Awake()
         {
@@ -41,15 +31,21 @@ namespace RPG.UI
             Instance = this;
             DontDestroyOnLoad(gameObject);
 
-            // BUG-17: servidor dedicado não tem UI — desativa tudo
             if (Application.isBatchMode)
             {
                 _isServerOnly = true;
-                Debug.Log("[FloatingTextManager] Servidor dedicado detectado — UI desabilitada.");
+                Debug.Log("[FloatingTextManager] Servidor dedicado — UI desabilitada.");
                 return;
             }
 
             PrewarmPool();
+            SceneManager.sceneLoaded += OnSceneLoaded;
+        }
+
+        private void OnDestroy()
+        {
+            if (!_isServerOnly)
+                SceneManager.sceneLoaded -= OnSceneLoaded;
         }
 
         private void Start()
@@ -58,11 +54,17 @@ namespace RPG.UI
             _cachedCamera = Camera.main;
         }
 
+        private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+        {
+            // A câmera pode mudar entre cenas
+            _cachedCamera = Camera.main;
+        }
+
         private void PrewarmPool()
         {
             if (floatingTextPrefab == null)
             {
-                Debug.LogWarning("[FloatingTextManager] floatingTextPrefab não configurado!");
+                Debug.LogWarning("[FloatingTextManager] floatingTextPrefab não configurado.");
                 return;
             }
 
@@ -77,7 +79,6 @@ namespace RPG.UI
 
         public void Show(string text, Vector3 worldPos, Color color)
         {
-            // BUG-17: guard duplo — servidor dedicado e prefab não configurado
             if (_isServerOnly || Application.isBatchMode) return;
             if (floatingTextPrefab == null) return;
 
@@ -92,8 +93,7 @@ namespace RPG.UI
                 ? _pool.Dequeue()
                 : Instantiate(floatingTextPrefab, transform);
 
-            obj.transform.position = worldPos + new Vector3(
-                Random.Range(-0.3f, 0.3f), 0f, 0f);
+            obj.transform.position = worldPos + new Vector3(Random.Range(-0.3f, 0.3f), 0f, 0f);
             obj.SetActive(true);
 
             var tmp = obj.GetComponent<TextMeshPro>()

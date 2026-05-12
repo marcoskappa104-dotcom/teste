@@ -4,25 +4,14 @@ using Mirror;
 namespace RPG.Data
 {
     /// <summary>
-    /// InventorySlotData — representa um slot no inventário do jogador.
-    ///
-    /// Trafega pela rede via Mirror SyncList.
-    /// Apenas ItemId (string) é enviado — o cliente resolve o ItemData
-    /// localmente via ItemDatabase.
-    ///
-    /// slotIndex: índice único e estável do slot (nunca muda após atribuído).
-    /// Isso permite referenciar itens de forma segura (ex: "equipe o slot 5").
+    /// Slot do inventário sincronizado via SyncList.
+    /// SlotIndex é único e estável — nunca muda após atribuído.
     /// </summary>
     [Serializable]
     public struct InventorySlotData : NetworkMessage
     {
-        /// <summary>Índice único do slot no inventário deste jogador.</summary>
         public int    SlotIndex;
-
-        /// <summary>ID do item (referência ao ItemDatabase).</summary>
         public string ItemId;
-
-        /// <summary>Quantidade (para stackáveis futuros; padrão = 1).</summary>
         public int    Quantity;
 
         public bool IsEmpty => string.IsNullOrEmpty(ItemId);
@@ -36,19 +25,15 @@ namespace RPG.Data
     }
 
     /// <summary>
-    /// PowerGemLoadout — os 4 slots de Joia do Poder (Q, W, E, R).
+    /// Os 4 slots de Joia do Poder (Q, W, E, R).
     /// Sincronizado via SyncVars no NetworkInventory.
     /// </summary>
     [Serializable]
     public struct PowerGemLoadout : NetworkMessage
     {
-        /// <summary>ItemId da Joia equipada no slot Q (índice 0).</summary>
         public string SlotQ;
-        /// <summary>ItemId da Joia equipada no slot W (índice 1).</summary>
         public string SlotW;
-        /// <summary>ItemId da Joia equipada no slot E (índice 2).</summary>
         public string SlotE;
-        /// <summary>ItemId da Joia equipada no slot R (índice 3).</summary>
         public string SlotR;
 
         public string GetSlot(int index) => index switch

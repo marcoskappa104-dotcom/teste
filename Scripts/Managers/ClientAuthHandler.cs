@@ -2,24 +2,17 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using Mirror;
 using RPG.Data;
+using System.Collections;
 using System.Collections.Generic;
 using System;
 
 namespace RPG.Network
 {
     /// <summary>
-    /// ClientAuthHandler v7
+    /// Lado cliente da autenticação. Mantém o nonce da sessão e envia
+    /// requisições de login/criação/seleção ao servidor.
     ///
-    /// CORREÇÕES v7:
-    ///   - Suporte ao sistema de nonce challenge-response (MsgAuthChallenge).
-    ///     Ao conectar, o servidor envia um nonce. O cliente armazena o nonce
-    ///     e usa GameManager.HashPasswordWithNonce() ao fazer login.
-    ///     Isso elimina replay attacks básicos de credenciais capturadas.
-    ///
-    ///   - SendLogin agora exige que o nonce tenha sido recebido antes de enviar.
-    ///     Se o nonce não chegou, aguarda até 5s antes de falhar.
-    ///
-    ///   - Todas as correções v6 mantidas (ReplaceHandler, reconexão, etc).
+    /// Singleton DontDestroyOnLoad — sobrevive a trocas de cena.
     /// </summary>
     public class ClientAuthHandler : MonoBehaviour
     {
@@ -32,12 +25,12 @@ namespace RPG.Network
         public event Action<bool, string>                         OnSelectCharacterResult;
         public event Action                                       OnServerDisconnected;
 
-        private bool   _waitingForSceneToLoad = false;
-        private string _sessionNonce          = "";
-        private bool   _nonceReceived         = false;
+        private const float NONCE_WAIT_TIMEOUT = 5f;
 
-        // Fila de ações aguardando nonce
-        private Action _pendingLoginAction = null;
+        private bool   _waitingForSceneToLoad;
+        private string _sessionNonce  = "";
+        private bool   _nonceReceived;
+        private Action _pendingLoginAction;
 
         private void Awake()
         {
@@ -59,12 +52,14 @@ namespace RPG.Network
             SceneManager.sceneLoaded          -= OnSceneLoaded;
         }
 
+        // ── Conexão ────────────────────────────────────────────────────────
+
         private void OnClientConnected()
         {
             _nonceReceived = false;
             _sessionNonce  = "";
 
-            // ReplaceHandler substitui se já existir, evitando exceção na reconexão.
+            // ReplaceHandler: substitui se já existir (importante na reconexão)
             NetworkClient.ReplaceHandler<MsgAuthChallenge>          (OnAuthChallenge);
             NetworkClient.ReplaceHandler<MsgLoginResponse>          (OnLoginResponse);
             NetworkClient.ReplaceHandler<MsgCreateAccountResponse>  (OnCreateAccountResponse);
@@ -72,7 +67,7 @@ namespace RPG.Network
             NetworkClient.ReplaceHandler<MsgCreateCharacterResponse>(OnCreateCharacterResponse);
             NetworkClient.ReplaceHandler<MsgSelectCharacterResponse>(OnSelectCharacterResponse);
 
-            Debug.Log("[ClientAuthHandler] Handlers registrados — aguardando challenge do servidor.");
+            Debug.Log("[ClientAuthHandler] Handlers registrados — aguardando challenge.");
         }
 
         private void OnClientDisconnectedEvent()
@@ -82,25 +77,21 @@ namespace RPG.Network
             _sessionNonce          = "";
             _pendingLoginAction    = null;
             SceneManager.sceneLoaded -= OnSceneLoaded;
-
-            Debug.Log("[ClientAuthHandler] Desconectado — estado limpo.");
         }
 
         public void OnDisconnectedFromServer()
         {
-            Debug.Log("[ClientAuthHandler] Desconectado do servidor.");
             OnServerDisconnected?.Invoke();
         }
 
-        // ── Challenge / Nonce ──────────────────────────────────────────────
+        // ── Challenge ──────────────────────────────────────────────────────
 
         private void OnAuthChallenge(MsgAuthChallenge msg)
         {
             _sessionNonce  = msg.Nonce;
             _nonceReceived = true;
-            Debug.Log("[ClientAuthHandler] Nonce recebido do servidor.");
 
-            // Se havia login pendente esperando o nonce, executa agora
+            // Se havia login esperando o nonce, executa agora
             if (_pendingLoginAction != null)
             {
                 var action = _pendingLoginAction;
@@ -109,11 +100,8 @@ namespace RPG.Network
             }
         }
 
-        // ── Envio ──────────────────────────────────────────────────────────
+        // ── Envio de requisições ───────────────────────────────────────────
 
-        /// <summary>
-        /// Envia requisição de login. Aguarda o nonce se ainda não chegou.
-        /// </summary>
         public void SendLogin(string username, string password)
         {
             if (!NetworkClient.isConnected)
@@ -140,16 +128,15 @@ namespace RPG.Network
             }
             else
             {
-                // Aguarda nonce com timeout via coroutine
                 _pendingLoginAction = DoSend;
-                StartCoroutine(WaitForNonceThenLogin(username));
+                StartCoroutine(WaitForNonceThenLogin());
             }
         }
 
-        private System.Collections.IEnumerator WaitForNonceThenLogin(string username)
+        private IEnumerator WaitForNonceThenLogin()
         {
             float elapsed = 0f;
-            while (!_nonceReceived && elapsed < 5f)
+            while (!_nonceReceived && elapsed < NONCE_WAIT_TIMEOUT)
             {
                 elapsed += Time.deltaTime;
                 yield return null;
@@ -159,15 +146,17 @@ namespace RPG.Network
             {
                 _pendingLoginAction = null;
                 OnLoginResult?.Invoke(false, "Timeout aguardando o servidor. Tente novamente.");
-                Debug.LogWarning("[ClientAuthHandler] Timeout aguardando nonce do servidor.");
             }
-            // Se nonce chegou, _pendingLoginAction já foi executado em OnAuthChallenge
+            // Caso contrário, OnAuthChallenge já executou _pendingLoginAction
         }
 
         public void SendCreateAccount(string username, string password)
         {
             if (!NetworkClient.isConnected)
-            { OnCreateAccountResult?.Invoke(false, "Sem conexão com o servidor."); return; }
+            {
+                OnCreateAccountResult?.Invoke(false, "Sem conexão com o servidor.");
+                return;
+            }
 
             NetworkClient.Send(new MsgCreateAccountRequest
             {
@@ -195,7 +184,7 @@ namespace RPG.Network
                 NetworkClient.Send(new MsgSelectCharacter { CharacterId = characterId });
         }
 
-        // ── Recebimento ────────────────────────────────────────────────────
+        // ── Respostas do servidor ──────────────────────────────────────────
 
         private void OnLoginResponse(MsgLoginResponse msg)
         {
@@ -219,8 +208,6 @@ namespace RPG.Network
 
             if (!msg.Success) return;
 
-            Debug.Log("[ClientAuthHandler] Personagem selecionado. Carregando GameplayScene...");
-
             _waitingForSceneToLoad = true;
             SceneManager.sceneLoaded += OnSceneLoaded;
             SceneManager.LoadScene(Managers.GameManager.SCENE_GAMEPLAY);
@@ -234,25 +221,17 @@ namespace RPG.Network
             SceneManager.sceneLoaded -= OnSceneLoaded;
             _waitingForSceneToLoad    = false;
 
-            Debug.Log("[ClientAuthHandler] GameplayScene carregada. Notificando servidor...");
             StartCoroutine(SendReadyAfterFrame());
         }
 
-        private System.Collections.IEnumerator SendReadyAfterFrame()
+        private IEnumerator SendReadyAfterFrame()
         {
-            // Aguarda 2 frames para garantir que NavMesh e todos os scripts iniciaram
+            // 2 frames para o NavMesh e os scripts iniciarem
             yield return null;
             yield return null;
 
             if (NetworkClient.isConnected)
-            {
                 NetworkClient.Send(new MsgClientSceneReady());
-                Debug.Log("[ClientAuthHandler] MsgClientSceneReady enviado ao servidor.");
-            }
-            else
-            {
-                Debug.LogWarning("[ClientAuthHandler] Sem conexão ao tentar enviar MsgClientSceneReady.");
-            }
         }
     }
 }

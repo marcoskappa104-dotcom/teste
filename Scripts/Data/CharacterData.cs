@@ -5,18 +5,17 @@ using UnityEngine;
 namespace RPG.Data
 {
     /// <summary>
-    /// CharacterData v5
-    ///
-    /// CORREÇÕES v5:
-    ///   - GetExperienceForLevel agora é static — pode ser chamado sem instância.
-    ///   - Clone() agora copia EquipmentBonuses.Resist* (adicionados em v2 de EquipmentBonuses).
-    ///   - Level nunca pode ser setado < 1 externamente (propriedade com validação).
-    ///   - AddExperience: garante que ExperienceToNextLevel nunca seja 0 no nivel máximo.
-    ///   - Constante MAX_ALLOCATED_PER_STAT adicionada para validação server-side.
+    /// Dados persistentes de um personagem.
+    /// Toda mudança que afeta stats derivados deve passar pelos setters/métodos
+    /// públicos — campos públicos existem apenas por compatibilidade com serialização.
     /// </summary>
     [Serializable]
     public class CharacterData
     {
+        public const int MAX_LEVEL              = 99;
+        public const int MAX_ALLOCATED_PER_STAT = 300;
+        public const int POINTS_PER_LEVEL_UP    = 5;
+
         public string        CharacterId;
         public string        CharacterName;
         public CharacterRace Race;
@@ -34,15 +33,8 @@ namespace RPG.Data
             set => _level = Math.Max(1, Math.Min(value, MAX_LEVEL));
         }
 
-        public long          Experience             = 0;
-        public long          ExperienceToNextLevel  = 100;
-        public const int     MAX_LEVEL              = 99;
-
-        /// <summary>
-        /// Máximo de pontos alocáveis por atributo — usado no servidor para
-        /// rejeitar alocações suspeitas de clientes modificados.
-        /// </summary>
-        public const int MAX_ALLOCATED_PER_STAT = 300;
+        public long Experience            = 0;
+        public long ExperienceToNextLevel = 100;
 
         public BaseAttributes    BaseAttributes   = new BaseAttributes();
         public EquipmentBonuses  EquipmentBonuses = new EquipmentBonuses();
@@ -71,17 +63,23 @@ namespace RPG.Data
         }
 
         /// <summary>
-        /// CORREÇÃO v5: agora static — não exige instância para calcular XP necessária.
-        /// Usa Math.Pow (double) para precisão correta em níveis altos (> 40).
+        /// Retorna o total de XP necessário para subir do nível atual.
+        /// Static para permitir cálculos sem instanciar.
         /// </summary>
         public static long GetExperienceForLevel(int level)
         {
-            return (long)(100.0 * Math.Pow(Math.Max(1, level), 1.5));
+            int clamped = Math.Max(1, Math.Min(level, MAX_LEVEL));
+            return (long)(100.0 * Math.Pow(clamped, 1.5));
         }
 
         /// <summary>
-        /// Adiciona experiência e processa level up.
+        /// Adiciona experiência e processa level-ups em cascata.
         /// Retorna true se houve ao menos um level up.
+        ///
+        /// Comportamento no nível máximo:
+        ///   - XP atual é mantido para mostrar na UI ("99 — XP excedente perdido")
+        ///   - ExpToNext fica em 0
+        ///   - Tentativas subsequentes de adicionar XP são silenciosamente ignoradas
         /// </summary>
         public bool AddExperience(long amount)
         {
@@ -93,27 +91,31 @@ namespace RPG.Data
 
             while (Experience >= ExperienceToNextLevel && Level < MAX_LEVEL)
             {
-                Experience            -= ExperienceToNextLevel;
-                Level++;                                          // usa o setter com clamp
-                FreeAttributePoints   += 5;
-                ExperienceToNextLevel  = Level >= MAX_LEVEL
+                Experience          -= ExperienceToNextLevel;
+                Level++;
+                FreeAttributePoints += POINTS_PER_LEVEL_UP;
+
+                ExperienceToNextLevel = Level >= MAX_LEVEL
                     ? 0L
                     : GetExperienceForLevel(Level);
+
                 leveled = true;
             }
 
+            // No nível máximo, descarta XP excedente sem zerar o histórico
+            // (anteriormente zerava Experience, perdendo informação útil para UI).
             if (Level >= MAX_LEVEL)
             {
-                Experience            = 0;
                 ExperienceToNextLevel = 0;
+                if (Experience < 0) Experience = 0;
             }
 
             return leveled;
         }
 
         /// <summary>
-        /// Clona os dados do personagem — útil para snapshots no servidor.
-        /// CORREÇÃO v5: copia todos os campos de EquipmentBonuses incluindo Resist*.
+        /// Cria uma cópia completa e independente. Útil para snapshots
+        /// e para evitar mutação acidental ao passar referências.
         /// </summary>
         public CharacterData Clone()
         {
@@ -141,13 +143,18 @@ namespace RPG.Data
                 },
                 EquipmentBonuses = new EquipmentBonuses
                 {
-                    STR = EquipmentBonuses.STR, AGI = EquipmentBonuses.AGI,
-                    VIT = EquipmentBonuses.VIT, DEX = EquipmentBonuses.DEX,
-                    INT = EquipmentBonuses.INT, LUK = EquipmentBonuses.LUK,
-                    ATK = EquipmentBonuses.ATK, DEF = EquipmentBonuses.DEF,
-                    MATK = EquipmentBonuses.MATK, MDEF = EquipmentBonuses.MDEF,
-                    HPBonus = EquipmentBonuses.HPBonus, MPBonus = EquipmentBonuses.MPBonus,
-                    // CORREÇÃO v5: Resist* agora incluídos no clone
+                    STR             = EquipmentBonuses.STR,
+                    AGI             = EquipmentBonuses.AGI,
+                    VIT             = EquipmentBonuses.VIT,
+                    DEX             = EquipmentBonuses.DEX,
+                    INT             = EquipmentBonuses.INT,
+                    LUK             = EquipmentBonuses.LUK,
+                    ATK             = EquipmentBonuses.ATK,
+                    DEF             = EquipmentBonuses.DEF,
+                    MATK            = EquipmentBonuses.MATK,
+                    MDEF            = EquipmentBonuses.MDEF,
+                    HPBonus         = EquipmentBonuses.HPBonus,
+                    MPBonus         = EquipmentBonuses.MPBonus,
                     ResistFire      = EquipmentBonuses.ResistFire,
                     ResistIce       = EquipmentBonuses.ResistIce,
                     ResistPoison    = EquipmentBonuses.ResistPoison,
@@ -158,8 +165,8 @@ namespace RPG.Data
     }
 
     /// <summary>
-    /// AccountData — usado apenas para transporte de mensagens de rede.
-    /// Characters é carregado separadamente pelo DatabaseManager.
+    /// Container leve usado apenas em mensagens de rede.
+    /// Personagens são carregados separadamente pelo DatabaseManager.
     /// </summary>
     [Serializable]
     public class AccountData

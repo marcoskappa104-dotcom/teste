@@ -1,6 +1,4 @@
 using UnityEngine;
-using UnityEngine.UI;
-using TMPro;
 using RPG.Data;
 using RPG.Network;
 using System.Collections.Generic;
@@ -8,29 +6,21 @@ using System.Collections.Generic;
 namespace RPG.UI
 {
     /// <summary>
-    /// EquipmentPanelUI v2
-    ///
-    /// NOVO v2 — Integração com o ActionPanel do InventoryUI:
-    ///   - Clique ESQUERDO em slot ocupado: notifica InventoryUI para abrir
-    ///     o ActionPanel com o botão "Desequipar".
-    ///   - Clique ESQUERDO em slot vazio: limpa seleção e fecha ActionPanel.
-    ///   - Clique DIREITO em slot ocupado: atalho — desequipa direto.
-    ///   - Hover em slot ocupado: tooltip do item.
-    ///
-    /// Novo método público ClearSelection() — chamado pelo InventoryUI quando
-    /// o ActionPanel é fechado externamente.
+    /// Painel lateral com os slots de equipamento (Arma, Escudo, Elmo, etc).
+    /// Faz parte do InventoryUI — comunica-se com ele para abrir o ActionPanel
+    /// quando o jogador clica em um item equipado.
     /// </summary>
     public class EquipmentPanelUI : MonoBehaviour
     {
-        [Header("Slots de Equipamento")]
-        [Tooltip("Configure cada EquipmentSlotUI com seu enum no Inspector.")]
+        [Header("Slots")]
+        [Tooltip("Configure cada widget com seu enum no Inspector.")]
         [SerializeField] private EquipmentSlotUI[] _slots;
 
         [Header("Tooltip (opcional)")]
         [SerializeField] private ItemTooltipUI _tooltip;
 
         [Header("Referência ao InventoryUI")]
-        [Tooltip("InventoryUI da mesma janela — usado para abrir o ActionPanel com 'Desequipar' ao clicar num slot equipado.")]
+        [Tooltip("InventoryUI usado para abrir o ActionPanel com 'Desequipar'.")]
         [SerializeField] private InventoryUI _inventoryUI;
 
         // ── Estado ─────────────────────────────────────────────────────────
@@ -58,12 +48,13 @@ namespace RPG.UI
         {
             _slotByEnum.Clear();
             if (_slots == null) return;
+
             foreach (var w in _slots)
             {
                 if (w == null) continue;
                 if (w.Slot == EquipmentSlot.None)
                 {
-                    Debug.LogWarning($"[EquipmentPanelUI] Slot widget '{w.name}' tem EquipmentSlot.None.");
+                    Debug.LogWarning($"[EquipmentPanelUI] Widget '{w.name}' tem EquipmentSlot.None.");
                     continue;
                 }
                 _slotByEnum[w.Slot] = w;
@@ -76,10 +67,10 @@ namespace RPG.UI
             foreach (var w in _slots)
             {
                 if (w == null) continue;
-                w.OnLeftClick   += HandleLeftClick;
-                w.OnRightClick  += HandleRightClick;
-                w.OnHoverEnter  += HandleHoverEnter;
-                w.OnHoverExit   += HandleHoverExit;
+                w.OnLeftClick  += HandleLeftClick;
+                w.OnRightClick += HandleRightClick;
+                w.OnHoverEnter += HandleHoverEnter;
+                w.OnHoverExit  += HandleHoverExit;
             }
         }
 
@@ -89,10 +80,10 @@ namespace RPG.UI
             foreach (var w in _slots)
             {
                 if (w == null) continue;
-                w.OnLeftClick   -= HandleLeftClick;
-                w.OnRightClick  -= HandleRightClick;
-                w.OnHoverEnter  -= HandleHoverEnter;
-                w.OnHoverExit   -= HandleHoverExit;
+                w.OnLeftClick  -= HandleLeftClick;
+                w.OnRightClick -= HandleRightClick;
+                w.OnHoverEnter -= HandleHoverEnter;
+                w.OnHoverExit  -= HandleHoverExit;
             }
         }
 
@@ -141,6 +132,7 @@ namespace RPG.UI
             foreach (var w in _slots)
             {
                 if (w == null) continue;
+
                 string itemId = _inventory.GetEquipped(w.Slot);
                 if (string.IsNullOrEmpty(itemId))
                 {
@@ -159,7 +151,7 @@ namespace RPG.UI
                 w.SetEquipment(item);
             }
 
-            // Se o slot selecionado ficou vazio (item foi desequipado), limpa seleção
+            // Limpa seleção se o slot selecionado ficou vazio
             if (_currentSelectedSlot != EquipmentSlot.None
                 && string.IsNullOrEmpty(_inventory.GetEquipped(_currentSelectedSlot)))
             {
@@ -176,15 +168,9 @@ namespace RPG.UI
         private void ClearAllSlots()
         {
             if (_slots == null) return;
-            foreach (var w in _slots)
-                w?.SetEmpty();
+            foreach (var w in _slots) w?.SetEmpty();
         }
 
-        /// <summary>
-        /// Limpa qualquer slot atualmente destacado.
-        /// Chamado pelo InventoryUI quando o ActionPanel é fechado externamente
-        /// (ex: usuário clicou em outro item do inventário).
-        /// </summary>
         public void ClearSelection()
         {
             _currentSelectedSlot = EquipmentSlot.None;
@@ -196,12 +182,6 @@ namespace RPG.UI
         // Pointer handlers
         // ══════════════════════════════════════════════════════════════════
 
-        /// <summary>
-        /// NOVO v2 — clique ESQUERDO:
-        ///   - Slot ocupado → seleciona + abre ActionPanel do InventoryUI
-        ///     com o botão "Desequipar".
-        ///   - Slot vazio → limpa seleção e fecha ActionPanel.
-        /// </summary>
         private void HandleLeftClick(EquipmentSlot slot)
         {
             if (_inventory == null) return;
@@ -209,7 +189,6 @@ namespace RPG.UI
             string itemId = _inventory.GetEquipped(slot);
             if (string.IsNullOrEmpty(itemId))
             {
-                // Slot vazio
                 ClearSelection();
                 _inventoryUI?.CloseActionPanelExternal();
                 return;
@@ -218,26 +197,20 @@ namespace RPG.UI
             var item = ItemDatabase.Instance?.GetItem(itemId);
             if (item == null) return;
 
-            // Seleciona visualmente (apenas o slot clicado)
             _currentSelectedSlot = slot;
             foreach (var kv in _slotByEnum)
                 kv.Value.SetSelected(kv.Key == slot);
 
-            // Notifica o InventoryUI para abrir o ActionPanel com "Desequipar"
             if (_inventoryUI != null)
                 _inventoryUI.ShowActionPanelForEquipment(slot, item);
             else
-                Debug.LogWarning("[EquipmentPanelUI] _inventoryUI não atribuído — clique não abre ActionPanel.");
+                Debug.LogWarning("[EquipmentPanelUI] _inventoryUI não atribuído.");
         }
 
-        /// <summary>
-        /// Clique DIREITO — atalho para desequipar direto (sem passar pelo painel).
-        /// </summary>
         private void HandleRightClick(EquipmentSlot slot)
         {
             if (_inventory == null) return;
             if (string.IsNullOrEmpty(_inventory.GetEquipped(slot))) return;
-
             _inventory.CmdUnequipItem((byte)slot);
         }
 

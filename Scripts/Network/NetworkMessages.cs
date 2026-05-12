@@ -3,47 +3,45 @@ using System.Collections.Generic;
 
 namespace RPG.Network
 {
-    // ── AUTENTICAÇÃO — Challenge/Response ─────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════
+    // Autenticação — Challenge / Response
+    // ══════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// NOVO v2: Enviado pelo servidor imediatamente após a conexão TCP/UDP.
-    /// O cliente deve usar este nonce ao assinar a senha para evitar replay attacks.
+    /// Enviado pelo servidor logo após a conexão.
+    /// Cliente deve usar o nonce para assinar a senha no login.
     /// </summary>
     public struct MsgAuthChallenge : NetworkMessage
     {
-        /// <summary>Nonce único por sessão — Base64(16 bytes aleatórios).</summary>
-        public string Nonce;
+        public string Nonce; // Base64(16 bytes aleatórios)
     }
 
-    // ── LOGIN ──────────────────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════
+    // Login
+    // ══════════════════════════════════════════════════════════════════════
 
     public struct MsgLoginRequest : NetworkMessage
     {
         public string Username;
-        /// <summary>
-        /// SHA-256(SHA-256(senha) + nonce) — o nonce foi recebido via MsgAuthChallenge.
-        /// Nunca enviar SHA-256 simples da senha — vulnerável a replay.
-        /// </summary>
+        /// <summary>SHA256(SHA256(senha) + nonce).</summary>
         public string SignedHash;
     }
 
     public struct MsgLoginResponse : NetworkMessage
     {
         public bool   Success;
-        public string Error;       // mensagem de erro se !Success
-        public string Username;    // confirmado pelo servidor
+        public string Error;
+        public string Username;
     }
 
-    // ── CRIAR CONTA ────────────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════
+    // Criar conta
+    // ══════════════════════════════════════════════════════════════════════
 
     public struct MsgCreateAccountRequest : NetworkMessage
     {
         public string Username;
-        /// <summary>
-        /// SHA-256 simples da senha (sem nonce) para criação de conta.
-        /// O servidor aplicará o salt antes de armazenar.
-        /// Em produção, usar TLS + nonce aqui também.
-        /// </summary>
+        /// <summary>SHA256(senha) — servidor armazena este valor diretamente.</summary>
         public string PasswordHash;
     }
 
@@ -53,7 +51,9 @@ namespace RPG.Network
         public string Error;
     }
 
-    // ── LISTA DE PERSONAGENS ───────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════
+    // Lista de personagens
+    // ══════════════════════════════════════════════════════════════════════
 
     public struct MsgRequestCharacterList : NetworkMessage { }
 
@@ -70,22 +70,26 @@ namespace RPG.Network
         public List<CharacterSummary> Characters;
     }
 
-    // ── CRIAR PERSONAGEM ───────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════
+    // Criar personagem
+    // ══════════════════════════════════════════════════════════════════════
 
     public struct MsgCreateCharacterRequest : NetworkMessage
     {
         public string Name;
-        public int    RaceIndex; // índice do enum CharacterRace
+        public int    RaceIndex; // CharacterRace enum
     }
 
     public struct MsgCreateCharacterResponse : NetworkMessage
     {
-        public bool   Success;
-        public string Error;
-        public List<CharacterSummary> UpdatedList; // lista atualizada após criação
+        public bool                   Success;
+        public string                 Error;
+        public List<CharacterSummary> UpdatedList;
     }
 
-    // ── SELECIONAR PERSONAGEM / ENTRAR NO JOGO ─────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════
+    // Selecionar personagem e entrar no jogo
+    // ══════════════════════════════════════════════════════════════════════
 
     public struct MsgSelectCharacter : NetworkMessage
     {
@@ -98,22 +102,18 @@ namespace RPG.Network
         public string Error;
     }
 
-    // ── ERRO GENÉRICO ──────────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════
+    // Erros e sincronização de cena
+    // ══════════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Resposta genérica de erro para requisições rejeitadas por falta de autenticação
-    /// ou outros erros de protocolo.
-    /// </summary>
     public struct MsgErrorResponse : NetworkMessage
     {
         public string Error;
     }
 
-    // ── CONFIRMAÇÃO DE CENA ────────────────────────────────────────────────
-
     /// <summary>
-    /// Enviado pelo cliente ao servidor quando a GameplayScene terminou de carregar.
-    /// O servidor só então spawna o player, garantindo que o NavMeshAgent funciona.
+    /// Cliente notifica o servidor que a GameplayScene terminou de carregar.
+    /// Só então o servidor spawna o player (garante NavMesh pronto).
     /// </summary>
     public struct MsgClientSceneReady : NetworkMessage { }
 }

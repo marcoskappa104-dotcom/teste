@@ -5,10 +5,10 @@ namespace RPG.Data
 {
     public enum ItemType
     {
-        PowerGem,       // Joia do Poder — concede uma skill
-        Equipment,      // Armadura, arma, escudo, anéis (sistema novo)
-        Consumable,     // Poção, comida, etc
-        Misc            // Materiais, quest items, etc
+        PowerGem,    // Joia do Poder — concede uma skill
+        Equipment,   // Armadura, arma, escudo, anéis
+        Consumable,  // Poção, comida
+        Misc         // Materiais, quest items
     }
 
     public enum ItemRarity
@@ -21,35 +21,15 @@ namespace RPG.Data
     }
 
     /// <summary>
-    /// ItemData v2 — ScriptableObject que define um item do jogo.
-    ///
-    /// MUDANÇAS v2 (sistema de equipamento):
-    ///   - Type=Equipment agora é totalmente funcional.
-    ///   - Adicionado EquipSlot (Weapon/Shield/Helmet/Armor/Gloves/Boots/Ring1/Ring2/etc).
-    ///   - Adicionados bônus completos: STR/AGI/VIT/DEX/INT/LUK + ATK/DEF/MATK/MDEF
-    ///     + HP/MP + ResistFire/Ice/Poison/Lightning.
-    ///   - Adicionados Requirements (Lv mínimo, atributos mínimos, raças permitidas).
-    ///   - Adicionada Durability (MaxDurability=0 → indestrutível por padrão).
-    ///   - Helper IsEquipment.
-    ///
-    /// COMO CRIAR UM EQUIPAMENTO:
-    ///   1. Assets → Create → RPG → Item Data
-    ///   2. ItemId único (ex: "weapon_iron_sword")
-    ///   3. Type = Equipment
-    ///   4. EquipSlot = Weapon (ou outro)
-    ///   5. Preencha os bônus desejados
-    ///   6. Configure Requirements (opcional)
-    ///   7. Adicione ao ItemDatabase.allItems da cena
-    ///
-    /// IMPORTANTE: NUNCA altere ItemId após criar personagens com este item —
-    /// o banco de dados referencia por ID.
+    /// ScriptableObject que define um item do jogo.
+    /// O ItemId é a chave de banco — NUNCA altere após o item estar em uso por jogadores.
     /// </summary>
     [CreateAssetMenu(menuName = "RPG/Item Data", fileName = "Item_New")]
     public class ItemData : ScriptableObject
     {
         // ── Identificação ──────────────────────────────────────────────────
         [Header("Identificação")]
-        [Tooltip("ID único e estável — NUNCA altere após criar personagens com este item.")]
+        [Tooltip("ID único e estável. NUNCA altere após criar personagens com este item.")]
         public string ItemId = "item_001";
 
         public string DisplayName = "Item";
@@ -60,24 +40,21 @@ namespace RPG.Data
         public ItemType   Type   = ItemType.Misc;
         public ItemRarity Rarity = ItemRarity.Common;
 
-        // ── Visual ─────────────────────────────────────────────────────────
         [Header("Visual")]
         public Sprite Icon;
 
-        // ── Drop ───────────────────────────────────────────────────────────
         [Header("Drop")]
-        [Tooltip("Peso de drop relativo. 100 = comum, 1 = rarissimo.")]
+        [Tooltip("Peso de drop relativo. 100 = comum, 1 = raríssimo.")]
         [Range(0, 100)]
         public int DropWeight = 10;
 
         // ── PowerGem ───────────────────────────────────────────────────────
-        [Header("PowerGem — preencha apenas se Type == PowerGem")]
-        [Tooltip("Dados da skill concedida por esta joia.")]
+        [Header("PowerGem (use apenas se Type == PowerGem)")]
         public SkillData EmbeddedSkill;
 
         // ── Equipment ──────────────────────────────────────────────────────
-        [Header("Equipment — preencha apenas se Type == Equipment")]
-        [Tooltip("Slot onde o item se encaixa. Ring1/Ring2 são intercambiáveis no equip.")]
+        [Header("Equipment (use apenas se Type == Equipment)")]
+        [Tooltip("Slot onde o item se encaixa. Ring1/Ring2 e Earring1/Earring2 são intercambiáveis.")]
         public EquipmentSlot EquipSlot = EquipmentSlot.None;
 
         [Header("Bônus de Atributo")]
@@ -103,24 +80,24 @@ namespace RPG.Data
         [Range(0f, 75f)] public float BonusResistLightning;
 
         [Header("Requisitos para Equipar")]
-        [Tooltip("Validados server-side. Cliente exibe no tooltip mas servidor decide.")]
+        [Tooltip("Validados server-side. Cliente usa apenas para tooltip.")]
         public EquipmentRequirements Requirements = new EquipmentRequirements();
 
         [Header("Durabilidade (futuro)")]
-        [Tooltip("0 = indestrutível. >0 = degradável a cada hit/recebimento de dano.")]
+        [Tooltip("0 = indestrutível. >0 = degradável.")]
         public int MaxDurability = 0;
 
         // ── Consumable ─────────────────────────────────────────────────────
-        [Header("Consumable — preencha apenas se Type == Consumable")]
-        public float HealAmount  = 0f;
-        public float ManaAmount  = 0f;
+        [Header("Consumable (use apenas se Type == Consumable)")]
+        public float HealAmount   = 0f;
+        public float ManaAmount   = 0f;
         public float BuffDuration = 0f;
 
         // ── Helpers ────────────────────────────────────────────────────────
 
         public bool IsPowerGem   => Type == ItemType.PowerGem;
         public bool IsEquipment  => Type == ItemType.Equipment && EquipSlot != EquipmentSlot.None;
-        public bool IsConsumable => Type == ItemType.Consumable;
+        public bool IsConsumable => Type == ItemType.Consumable && (HealAmount > 0f || ManaAmount > 0f);
 
         public Color RarityColor => Rarity switch
         {
@@ -142,10 +119,7 @@ namespace RPG.Data
             _                    => Rarity.ToString()
         };
 
-        /// <summary>
-        /// Retorna true se este item NÃO concede nenhum bônus relevante.
-        /// Útil para tooltips minimalistas.
-        /// </summary>
+        /// <summary>True se este equipamento concede algum bônus relevante.</summary>
         public bool HasAnyBonus()
         {
             if (!IsEquipment) return false;
@@ -158,17 +132,19 @@ namespace RPG.Data
         }
 
 #if UNITY_EDITOR
-        /// <summary>
-        /// Validação no Editor: avisa se o ItemData tem inconsistências comuns.
-        /// Roda quando o asset é selecionado/modificado no Inspector.
-        /// </summary>
         private void OnValidate()
         {
             if (Type == ItemType.Equipment && EquipSlot == EquipmentSlot.None)
-                Debug.LogWarning($"[ItemData] '{name}' é Equipment mas EquipSlot=None.");
+                Debug.LogWarning($"[ItemData] '{name}' é Equipment mas EquipSlot está vazio.");
 
             if (Type != ItemType.Equipment && EquipSlot != EquipmentSlot.None)
                 Debug.LogWarning($"[ItemData] '{name}' tem EquipSlot mas Type não é Equipment.");
+
+            if (Type == ItemType.PowerGem && EmbeddedSkill == null)
+                Debug.LogWarning($"[ItemData] '{name}' é PowerGem mas EmbeddedSkill é nulo.");
+
+            if (Type == ItemType.Consumable && HealAmount == 0f && ManaAmount == 0f)
+                Debug.LogWarning($"[ItemData] '{name}' é Consumable mas não restaura HP nem MP.");
 
             if (Requirements != null && Requirements.MinLevel < 1)
                 Requirements.MinLevel = 1;

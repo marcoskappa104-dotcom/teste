@@ -4,50 +4,38 @@ using Mirror;
 namespace RPG.Network
 {
     /// <summary>
-    /// NetworkConnectionBootstrapper v2
-    ///
-    /// CORREÇÕES:
-    ///   - Removido redirect para ServerScene (causava erro porque a cena
-    ///     pode não estar no Build Settings ainda).
-    ///     O ServerEntryPoint faz esse redirect ANTES, no Awake.
-    ///   - Não tenta reconectar ao ser destruído (OnDestroy simplificado).
-    ///   - Servidor: apenas StartServer(). Ponto.
-    ///   - Cliente: apenas StartClient(). Ponto.
+    /// Inicia o lado correto da rede ao carregar a cena:
+    ///   - Server dedicado (build com -server ou batchmode): StartServer
+    ///   - Host (build com -host): StartHost
+    ///   - Caso contrário (cliente normal): StartClient
     /// </summary>
     public class NetworkConnectionBootstrapper : MonoBehaviour
     {
-        [Header("Conexão (apenas cliente)")]
+        [Header("Conexão (cliente)")]
         [SerializeField] public string serverAddress = "localhost";
         [SerializeField] public ushort serverPort    = 7777;
 
         private void Start()
         {
-            // Já está rodando? Não faz nada.
             if (NetworkServer.active || NetworkClient.active)
             {
-                Debug.Log("[Bootstrapper] Rede já ativa — ignorando Start().");
+                Debug.Log("[Bootstrapper] Rede já ativa.");
                 return;
             }
 
             bool isServer = IsServerBuild();
             bool isHost   = IsHostBuild();
 
-            // Configura porta KCP
-            var kcp = GetComponentInChildren<kcp2k.KcpTransport>()
-                   ?? FindObjectOfType<kcp2k.KcpTransport>();
-            if (kcp != null)
-                kcp.Port = serverPort;
-            else
-                Debug.LogWarning("[Bootstrapper] KcpTransport não encontrado!");
+            ConfigureKcpPort();
 
             if (isServer)
             {
-                Debug.Log($"[Bootstrapper] SERVIDOR DEDICADO | Porta:{serverPort}");
+                Debug.Log($"[Bootstrapper] SERVIDOR DEDICADO | porta:{serverPort}");
                 NetworkManager.singleton.StartServer();
             }
             else if (isHost)
             {
-                Debug.Log($"[Bootstrapper] HOST | Porta:{serverPort}");
+                Debug.Log($"[Bootstrapper] HOST | porta:{serverPort}");
                 NetworkManager.singleton.networkAddress = serverAddress;
                 NetworkManager.singleton.StartHost();
             }
@@ -57,6 +45,16 @@ namespace RPG.Network
                 NetworkManager.singleton.networkAddress = serverAddress;
                 NetworkManager.singleton.StartClient();
             }
+        }
+
+        private void ConfigureKcpPort()
+        {
+            var kcp = GetComponentInChildren<kcp2k.KcpTransport>()
+                   ?? FindObjectOfType<kcp2k.KcpTransport>();
+            if (kcp != null)
+                kcp.Port = serverPort;
+            else
+                Debug.LogWarning("[Bootstrapper] KcpTransport não encontrado.");
         }
 
         public static bool IsServerBuild()

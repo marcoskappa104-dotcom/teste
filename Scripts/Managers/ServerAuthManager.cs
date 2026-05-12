@@ -8,36 +8,23 @@ using System.Collections;
 namespace RPG.Network
 {
     /// <summary>
-    /// ServerAuthManager v8
+    /// Lado servidor da autenticação.
+    /// Mantém sessões por connectionId e processa requisições de login,
+    /// criação de conta, listagem e seleção de personagem.
     ///
-    /// CORREÇÃO v8 — BUG: Sessões Authenticated nunca expiravam.
-    ///
-    ///   PROBLEMA:
-    ///     CleanupExpiredSessions() só limpava sessões no estado Unauthenticated.
-    ///     Isso significa que um cliente que logou (Authenticated) mas nunca selecionou
-    ///     um personagem ficava na memória indefinidamente, mesmo sem atividade por horas.
-    ///     Em um servidor de longa duração, isso acumula entradas zumbi em _sessions.
-    ///     Sessões InGame são excluídas corretamente pelo OnServerDisconnect, mas
-    ///     sessões Authenticated ociosas (idle) não tinham caminho de limpeza.
-    ///
-    ///   SOLUÇÃO:
-    ///     CleanupExpiredSessions agora limpa TANTO Unauthenticated QUANTO Authenticated
-    ///     sessões que excederam SESSION_TTL_SECONDS sem atividade.
-    ///     Sessões InGame são propositalmente ignoradas — elas são removidas por
-    ///     OnServerDisconnect, que é sempre chamado pelo Mirror.
-    ///
-    ///   Todas as correções v7 mantidas (rate limiting, nonce, challenge-response).
+    /// Limpa sessões ociosas (Unauthenticated/Authenticated) por TTL.
+    /// Sessões InGame só são removidas em OnServerDisconnect.
     /// </summary>
     public class ServerAuthManager : MonoBehaviour
     {
         public static ServerAuthManager Instance { get; private set; }
 
-        // ── Configuração de segurança ──────────────────────────────────────
         private const int   LOGIN_MAX_ATTEMPTS  = 5;
-        private const float SESSION_TTL_SECONDS = 300f; // 5 minutos sem atividade
+        private const float SESSION_TTL_SECONDS = 300f; // 5 min sem atividade
+        private const float CLEANUP_INTERVAL    = 60f;
 
         [Header("Debug")]
-        [Tooltip("Ativa logs detalhados do fluxo de autenticação. DESATIVE em produção.")]
+        [Tooltip("Logs detalhados do fluxo de auth. DESATIVE em produção.")]
         [SerializeField] private bool debugAuth = false;
 
         private enum ConnState { Unauthenticated, Authenticated, InGame }
@@ -47,12 +34,12 @@ namespace RPG.Network
             public ConnState   State           = ConnState.Unauthenticated;
             public string      Username        = "";
             public string      CharacterId     = "";
-            public AccountData CachedAccount   = null;
-            public int         LoginAttempts   = 0;
+            public AccountData CachedAccount;
+            public int         LoginAttempts;
             public string      SessionNonce    = "";
             public float       LastActivityTime;
 
-            public ConnData() => LastActivityTime = UnityEngine.Time.time;
+            public ConnData() => LastActivityTime = Time.time;
         }
 
         private readonly Dictionary<int, ConnData> _sessions = new();
@@ -71,9 +58,9 @@ namespace RPG.Network
 
         public void RegisterHandlers()
         {
-            NetworkServer.RegisterHandler<MsgLoginRequest>          (OnLoginRequest,          false);
-            NetworkServer.RegisterHandler<MsgCreateAccountRequest>  (OnCreateAccountRequest,  false);
-            NetworkServer.RegisterHandler<MsgRequestCharacterList>  (OnRequestCharacterList,  false);
+            NetworkServer.RegisterHandler<MsgLoginRequest>          (OnLoginRequest,           false);
+            NetworkServer.RegisterHandler<MsgCreateAccountRequest>  (OnCreateAccountRequest,   false);
+            NetworkServer.RegisterHandler<MsgRequestCharacterList>  (OnRequestCharacterList,   false);
             NetworkServer.RegisterHandler<MsgCreateCharacterRequest>(OnCreateCharacterRequest, false);
             NetworkServer.RegisterHandler<MsgSelectCharacter>       (OnSelectCharacter,        false);
 
@@ -83,13 +70,11 @@ namespace RPG.Network
 
         public void OnServerConnect(NetworkConnectionToClient conn)
         {
-            var session = new ConnData();
-            session.SessionNonce = GameManager.GenerateNonce();
+            var session = new ConnData { SessionNonce = GameManager.GenerateNonce() };
             _sessions[conn.connectionId] = session;
 
             conn.Send(new MsgAuthChallenge { Nonce = session.SessionNonce });
-            LogAuth($"Nova conexão: {conn.connectionId} | Nonce: {session.SessionNonce}");
-            Debug.Log($"[ServerAuth] Nova conexão: {conn.connectionId} | Nonce enviado.");
+            LogAuth($"Nova conexão: {conn.connectionId} | nonce enviado.");
         }
 
         public void OnServerDisconnect(NetworkConnectionToClient conn)
@@ -97,12 +82,12 @@ namespace RPG.Network
             _sessions.Remove(conn.connectionId);
         }
 
-        // ── Login ──────────────────────────────────────────────────────────
+        // ══════════════════════════════════════════════════════════════════
+        // Login
+        // ══════════════════════════════════════════════════════════════════
 
         private void OnLoginRequest(NetworkConnectionToClient conn, MsgLoginRequest msg)
         {
-            Debug.Log($"[ServerAuth] Login: '{msg.Username}' conn:{conn.connectionId}");
-
             if (!_sessions.TryGetValue(conn.connectionId, out var session))
             {
                 conn.Send(new MsgLoginResponse { Success = false, Error = "Sessão inválida." });
@@ -118,7 +103,7 @@ namespace RPG.Network
             session.LoginAttempts++;
             if (session.LoginAttempts > LOGIN_MAX_ATTEMPTS)
             {
-                Debug.LogWarning($"[ServerAuth] SECURITY: conn:{conn.connectionId} excedeu tentativas ({LOGIN_MAX_ATTEMPTS}). Desconectando.");
+                Debug.LogWarning($"[ServerAuth] SECURITY: conn:{conn.connectionId} excedeu tentativas.");
                 conn.Send(new MsgLoginResponse { Success = false, Error = "Muitas tentativas. Tente mais tarde." });
                 conn.Disconnect();
                 return;
@@ -132,12 +117,10 @@ namespace RPG.Network
 
             if (string.IsNullOrWhiteSpace(session.SessionNonce))
             {
-                Debug.LogError($"[ServerAuth] SessionNonce vazio para conn:{conn.connectionId}!");
+                Debug.LogError($"[ServerAuth] SessionNonce vazio para conn:{conn.connectionId}.");
                 conn.Send(new MsgLoginResponse { Success = false, Error = "Erro de sessão. Reconecte." });
                 return;
             }
-
-            LogAuth($"Login attempt: user='{msg.Username}' nonce='{session.SessionNonce}' signedHash='{msg.SignedHash}'");
 
             var account = DatabaseManager.Instance?.TryLoginWithSignedHash(
                 msg.Username, msg.SignedHash, session.SessionNonce);
@@ -145,8 +128,11 @@ namespace RPG.Network
             if (account == null)
             {
                 string attempts = $"({session.LoginAttempts}/{LOGIN_MAX_ATTEMPTS})";
-                LogAuth($"Login falhou para '{msg.Username}' {attempts}");
-                conn.Send(new MsgLoginResponse { Success = false, Error = $"Usuário ou senha incorretos. {attempts}" });
+                conn.Send(new MsgLoginResponse
+                {
+                    Success = false,
+                    Error   = $"Usuário ou senha incorretos. {attempts}"
+                });
                 return;
             }
 
@@ -156,12 +142,15 @@ namespace RPG.Network
             session.LoginAttempts    = 0;
             session.LastActivityTime = Time.time;
 
-            Debug.Log($"[ServerAuth] Login OK: {account.Username}");
             conn.Send(new MsgLoginResponse { Success = true, Username = account.Username });
             SendCharacterList(conn, account);
+
+            Debug.Log($"[ServerAuth] Login OK: {account.Username}");
         }
 
-        // ── Criar conta ────────────────────────────────────────────────────
+        // ══════════════════════════════════════════════════════════════════
+        // Criar conta
+        // ══════════════════════════════════════════════════════════════════
 
         private void OnCreateAccountRequest(NetworkConnectionToClient conn, MsgCreateAccountRequest msg)
         {
@@ -182,11 +171,13 @@ namespace RPG.Network
                 conn.Send(new MsgCreateAccountResponse { Success = false, Error = error });
                 return;
             }
-            Debug.Log($"[ServerAuth] Conta criada: {msg.Username}");
             conn.Send(new MsgCreateAccountResponse { Success = true });
+            Debug.Log($"[ServerAuth] Conta criada: {msg.Username}");
         }
 
-        // ── Lista de personagens ───────────────────────────────────────────
+        // ══════════════════════════════════════════════════════════════════
+        // Lista / criar / selecionar personagens
+        // ══════════════════════════════════════════════════════════════════
 
         private void OnRequestCharacterList(NetworkConnectionToClient conn, MsgRequestCharacterList msg)
         {
@@ -214,8 +205,6 @@ namespace RPG.Network
                 });
             conn.Send(new MsgCharacterListResponse { Characters = list });
         }
-
-        // ── Criar personagem ───────────────────────────────────────────────
 
         private void OnCreateCharacterRequest(NetworkConnectionToClient conn, MsgCreateCharacterRequest msg)
         {
@@ -247,8 +236,6 @@ namespace RPG.Network
             Debug.Log($"[ServerAuth] Personagem criado: {msg.Name} (conta:{session.Username})");
         }
 
-        // ── Selecionar personagem ──────────────────────────────────────────
-
         private void OnSelectCharacter(NetworkConnectionToClient conn, MsgSelectCharacter msg)
         {
             if (!RequireAuth(conn, out var session)) return;
@@ -265,8 +252,11 @@ namespace RPG.Network
             if (charData == null)
             {
                 conn.Send(new MsgSelectCharacterResponse
-                    { Success = false, Error = "Personagem não encontrado ou não pertence a esta conta." });
-                Debug.LogWarning($"[ServerAuth] SECURITY: {session.Username} tentou selecionar personagem {msg.CharacterId}");
+                {
+                    Success = false,
+                    Error   = "Personagem não encontrado ou não pertence a esta conta."
+                });
+                Debug.LogWarning($"[ServerAuth] SECURITY: {session.Username} tentou selecionar {msg.CharacterId}");
                 return;
             }
 
@@ -278,7 +268,9 @@ namespace RPG.Network
             Debug.Log($"[ServerAuth] {charData.CharacterName} ({charData.Race}) entrando | conn:{conn.connectionId}");
         }
 
-        // ── Helpers ────────────────────────────────────────────────────────
+        // ══════════════════════════════════════════════════════════════════
+        // Helpers
+        // ══════════════════════════════════════════════════════════════════
 
         private bool RequireAuth(NetworkConnectionToClient conn, out ConnData session)
         {
@@ -303,35 +295,31 @@ namespace RPG.Network
             if (debugAuth) Debug.Log($"[ServerAuth-DEBUG] {msg}");
         }
 
-        // ── Limpeza de sessões expiradas ───────────────────────────────────
+        // ══════════════════════════════════════════════════════════════════
+        // Limpeza de sessões expiradas
+        // ══════════════════════════════════════════════════════════════════
 
         /// <summary>
-        /// CORREÇÃO v8: agora limpa TANTO Unauthenticated QUANTO Authenticated ociosas.
-        ///
-        /// Sessões InGame são propositalmente ignoradas — elas são sempre removidas
-        /// pelo OnServerDisconnect (garantia do Mirror), então não precisam de limpeza
-        /// por timer e não devem ser expiradas enquanto o jogador está ativo.
-        ///
-        /// Estado de limpeza por timer:
-        ///   Unauthenticated → limpa após SESSION_TTL_SECONDS sem atividade  ✓ (antes)
-        ///   Authenticated   → limpa após SESSION_TTL_SECONDS sem atividade  ✓ (NOVO v8)
-        ///   InGame          → NUNCA limpa por timer (apenas via disconnect) ✓
+        /// Remove sessões ociosas há mais de SESSION_TTL_SECONDS.
+        /// Estados:
+        ///   Unauthenticated → limpa por timer
+        ///   Authenticated   → limpa por timer (idle, sem entrar no jogo)
+        ///   InGame          → NUNCA limpa por timer (apenas via disconnect)
         /// </summary>
         private IEnumerator CleanupExpiredSessions()
         {
-            var wait = new WaitForSeconds(60f);
+            var wait = new WaitForSeconds(CLEANUP_INTERVAL);
+            var expired = new List<int>();
+
             while (true)
             {
                 yield return wait;
 
-                var expired = new List<int>();
+                expired.Clear();
                 foreach (var kv in _sessions)
                 {
-                    var state = kv.Value.State;
-                    bool isIdle = Time.time - kv.Value.LastActivityTime > SESSION_TTL_SECONDS;
-
-                    // Limpa qualquer sessão não-InGame que esteja ociosa há tempo demais
-                    if (state != ConnState.InGame && isIdle)
+                    if (kv.Value.State == ConnState.InGame) continue;
+                    if (Time.time - kv.Value.LastActivityTime > SESSION_TTL_SECONDS)
                         expired.Add(kv.Key);
                 }
 

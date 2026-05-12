@@ -1,42 +1,27 @@
+using System;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.AI;
 using RPG.Data;
-using System;
-using System.Collections.Generic;
 
 namespace RPG.Character
 {
     /// <summary>
-    /// PlayerEntity v4
+    /// Representação local (cliente) do estado do jogador.
+    /// Recebe atualizações do servidor via NetworkPlayer e expõe eventos para a UI.
     ///
-    /// CORREÇÕES v4:
-    ///
-    ///   BUG — Mutação direta de Stats.MaxHP/MaxMP nos hooks de SyncVar:
-    ///     SetHPFromServer, SetMPFromServer e RefreshStatsFromServer modificavam
-    ///     Stats.MaxHP/MaxMP diretamente em um objeto DerivedStats compartilhado.
-    ///     Como DerivedStats é uma classe (referência), qualquer outro sistema
-    ///     lendo Stats simultaneamente via _player.Stats.MaxHP recebia o valor
-    ///     intermediário durante a mutação.
-    ///     SOLUÇÃO: SetHPFromServer/SetMPFromServer NÃO modificam mais Stats diretamente.
-    ///     RefreshStatsFromServer cria um clone de Stats e aplica os novos valores,
-    ///     tornando a troca atômica (substituição de referência).
-    ///
-    ///   BUG — MoveToConfirmed não verificava NavMesh:
-    ///     Chamado com destino inválido causava warning do NavMeshAgent.
-    ///     SOLUÇÃO: verifica isOnNavMesh antes de SetDestination.
-    ///
-    ///   MELHORIA — MainCamera property simplificada para campo privado com
-    ///     lazy init segura (não recalcula toda chamada).
-    ///
-    ///   Todas as correções v3 mantidas (FullRefreshStatsFromData, IsInitialized, etc).
+    /// Princípios:
+    ///   - Stats é uma referência imutável após criada. Mudanças geram um novo
+    ///     objeto via Clone() — outros leitores nunca veem estado intermediário.
+    ///   - Eventos disparam APÓS o estado ser totalmente consistente.
+    ///   - Não há lógica de gameplay aqui — apenas estado e eventos.
     /// </summary>
     [RequireComponent(typeof(NavMeshAgent))]
     public class PlayerEntity : MonoBehaviour
     {
-        // ── Registro estático ──────────────────────────────────────────────
         public static readonly HashSet<PlayerEntity> All = new HashSet<PlayerEntity>();
 
-        // ── Dados recebidos do servidor ────────────────────────────────────
+        // ── Estado autoritativo (replicado do servidor) ────────────────────
         public CharacterData Data  { get; private set; }
         public DerivedStats  Stats { get; private set; }
 
@@ -57,7 +42,6 @@ namespace RPG.Character
         private NavMeshAgent _agent;
         public  NavMeshAgent Agent => _agent;
 
-        // ── Cache da câmera ────────────────────────────────────────────────
         private Camera _cachedCamera;
         public  Camera MainCamera
         {
@@ -69,12 +53,9 @@ namespace RPG.Character
             }
         }
 
-        // ── Alvo selecionado ───────────────────────────────────────────────
         public ITargetable CurrentTarget { get; private set; }
 
         // ── Lifecycle ──────────────────────────────────────────────────────
-        private void OnEnable()  => All.Add(this);
-        private void OnDisable() => All.Remove(this);
 
         private void Awake()
         {
@@ -82,13 +63,16 @@ namespace RPG.Character
             _cachedCamera = Camera.main;
         }
 
+        private void OnEnable()  => All.Add(this);
+        private void OnDisable() => All.Remove(this);
+
         // ── Inicialização ──────────────────────────────────────────────────
 
         public void InitializeFromServer(CharacterData data)
         {
             if (data == null)
             {
-                Debug.LogError("[PlayerEntity] InitializeFromServer: data é null.");
+                Debug.LogError("[PlayerEntity] InitializeFromServer: data nulo.");
                 return;
             }
 
@@ -100,20 +84,16 @@ namespace RPG.Character
 
             ConfigureAgent();
 
-            Debug.Log($"[PlayerEntity] Inicializado: {data.CharacterName} " +
-                      $"Lv{data.Level} HP:{CurrentHP:0}/{Stats.MaxHP:0}");
-
             OnInitialized?.Invoke();
             OnHPChanged?.Invoke(CurrentHP, Stats.MaxHP);
             OnMPChanged?.Invoke(CurrentMP, Stats.MaxMP);
         }
 
-        // ── Atualizações de estado vindas do servidor ─────────────────────
+        // ── Atualizações vindas do servidor ────────────────────────────────
 
         /// <summary>
-        /// CORREÇÃO v4: NÃO modifica Stats.MaxHP diretamente.
-        /// Usa o MaxHP atual de Stats como referência para o clamp.
-        /// Se MaxHP precisar mudar, use RefreshStatsFromServer.
+        /// Atualiza HP atual e máximo de forma atômica.
+        /// Se MaxHP mudou, clona Stats antes de modificar (substituição de referência).
         /// </summary>
         public void SetHPFromServer(float hp, float maxHp)
         {
@@ -121,8 +101,7 @@ namespace RPG.Character
 
             bool wasDead = IsDead;
 
-            // Atualiza MaxHP de forma atômica via clone se necessário
-            if (Stats.MaxHP != maxHp)
+            if (!Mathf.Approximately(Stats.MaxHP, maxHp))
             {
                 var updated = Stats.Clone();
                 updated.MaxHP = maxHp;
@@ -130,25 +109,22 @@ namespace RPG.Character
             }
 
             CurrentHP = Mathf.Clamp(hp, 0f, maxHp);
-
             OnHPChanged?.Invoke(CurrentHP, maxHp);
 
             bool nowDead = IsDead;
             if (nowDead != wasDead)
             {
-                if (nowDead) _agent?.ResetPath();
+                if (nowDead && _agent != null && _agent.isOnNavMesh)
+                    _agent.ResetPath();
                 OnDeathChanged?.Invoke(nowDead);
             }
         }
 
-        /// <summary>
-        /// CORREÇÃO v4: NÃO modifica Stats.MaxMP diretamente.
-        /// </summary>
         public void SetMPFromServer(float mp, float maxMp)
         {
             if (!IsInitialized) return;
 
-            if (Stats.MaxMP != maxMp)
+            if (!Mathf.Approximately(Stats.MaxMP, maxMp))
             {
                 var updated = Stats.Clone();
                 updated.MaxMP = maxMp;
@@ -160,8 +136,8 @@ namespace RPG.Character
         }
 
         /// <summary>
-        /// CORREÇÃO v4: substituição atômica de Stats via Clone.
-        /// Outros leitores de Stats nunca veem estado intermediário.
+        /// Atualiza apenas MaxHP/MaxMP em uma substituição atômica.
+        /// Outros leitores nunca veem estado parcialmente atualizado.
         /// </summary>
         public void RefreshStatsFromServer(float maxHp, float maxMp)
         {
@@ -170,7 +146,7 @@ namespace RPG.Character
             var updated = Stats.Clone();
             updated.MaxHP = maxHp;
             updated.MaxMP = maxMp;
-            Stats = updated;  // troca atômica de referência
+            Stats = updated;
 
             CurrentHP = Mathf.Min(CurrentHP, maxHp);
             CurrentMP = Mathf.Min(CurrentMP, maxMp);
@@ -181,19 +157,19 @@ namespace RPG.Character
         }
 
         /// <summary>
-        /// Recalcula TODOS os DerivedStats a partir dos dados atuais de Data.
-        /// Chamado quando o servidor confirma alocação de atributo (StatsVersion bump).
+        /// Recalcula TODOS os DerivedStats a partir do Data atual.
+        /// Usado quando o servidor confirma mudança de atributos ou equipamento.
         /// </summary>
         public void FullRefreshStatsFromData()
         {
             if (!IsInitialized || Data == null) return;
 
-            Stats = Data.GetDerivedStats();  // novo objeto, substituição atômica
+            Stats = Data.GetDerivedStats();
 
             ConfigureAgent();
 
-            if (CurrentHP > Stats.MaxHP) CurrentHP = Stats.MaxHP;
-            if (CurrentMP > Stats.MaxMP) CurrentMP = Stats.MaxMP;
+            CurrentHP = Mathf.Min(CurrentHP, Stats.MaxHP);
+            CurrentMP = Mathf.Min(CurrentMP, Stats.MaxMP);
 
             OnStatsChanged?.Invoke();
             OnHPChanged?.Invoke(CurrentHP, Stats.MaxHP);
@@ -223,10 +199,10 @@ namespace RPG.Character
         public void OnServerDeath()
         {
             CurrentHP = 0f;
-            _agent?.ResetPath();
+            if (_agent != null && _agent.isOnNavMesh)
+                _agent.ResetPath();
             OnHPChanged?.Invoke(0f, Stats?.MaxHP ?? 1f);
             OnDeathChanged?.Invoke(true);
-            Debug.Log($"[PlayerEntity] Morte confirmada: {Data?.CharacterName}");
         }
 
         public void OnServerRespawn(Vector3 position, float hp, float maxHp, float mp, float maxMp)
@@ -234,9 +210,9 @@ namespace RPG.Character
             if (!IsInitialized) return;
 
             transform.position = position;
-            _agent?.Warp(position);
+            if (_agent != null && _agent.isOnNavMesh)
+                _agent.Warp(position);
 
-            // Substituição atômica de Stats
             var updated = Stats.Clone();
             updated.MaxHP = maxHp;
             updated.MaxMP = maxMp;
@@ -248,15 +224,10 @@ namespace RPG.Character
             OnDeathChanged?.Invoke(false);
             OnHPChanged?.Invoke(CurrentHP, maxHp);
             OnMPChanged?.Invoke(CurrentMP, maxMp);
-
-            Debug.Log($"[PlayerEntity] Respawn em {position}");
         }
 
-        // ── Movimento ──────────────────────────────────────────────────────
+        // ── Movimento (apenas predição local) ──────────────────────────────
 
-        /// <summary>
-        /// CORREÇÃO v4: verifica isOnNavMesh antes de SetDestination.
-        /// </summary>
         public void MoveToConfirmed(Vector3 destination)
         {
             if (IsDead || _agent == null || !_agent.isOnNavMesh) return;
@@ -267,7 +238,11 @@ namespace RPG.Character
                 _agent.SetDestination(destination);
         }
 
-        public void StopMovement() => _agent?.ResetPath();
+        public void StopMovement()
+        {
+            if (_agent != null && _agent.isOnNavMesh)
+                _agent.ResetPath();
+        }
 
         public bool HasReachedDestination()
         {

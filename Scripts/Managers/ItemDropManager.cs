@@ -6,24 +6,18 @@ using System.Collections.Generic;
 namespace RPG.Managers
 {
     /// <summary>
-    /// ItemDropManager v2
+    /// Sorteia e spawna item drops quando um monstro morre.
+    /// Toda lógica é server-side.
     ///
-    /// CORREÇÕES v2:
-    ///
-    ///   BUG-07 — Memory leak: GameObject instanciado antes de checar ItemDatabase:
-    ///     O código original chamava Instantiate() antes de verificar se o item
-    ///     existia no banco. Se ItemDatabase fosse null ou o item não existisse,
-    ///     o GameObject ficava na cena sem ser destruído → memory leak no servidor.
-    ///     SOLUÇÃO: toda validação é feita ANTES de qualquer Instantiate().
-    ///
-    ///   Todas as correções v1 mantidas (NetworkServer.active check, scatter).
+    /// Valida o item no ItemDatabase ANTES de instanciar — evita memory leak
+    /// de GameObjects órfãos quando o item não existe.
     /// </summary>
     public class ItemDropManager : MonoBehaviour
     {
         public static ItemDropManager Instance { get; private set; }
 
         [Header("Prefab do Item no Mundo")]
-        [Tooltip("Deve ter NetworkIdentity + WorldItem.")]
+        [Tooltip("Precisa ter NetworkIdentity + WorldItem.")]
         [SerializeField] private GameObject worldItemPrefab;
 
         [Header("Tabela de Drop Global (fallback)")]
@@ -41,38 +35,37 @@ namespace RPG.Managers
         }
 
         /// <summary>
-        /// Sorteia e spawna um drop para o monstro morto.
-        ///
-        /// dropChance: 0-100. Probabilidade de dropar alguma coisa.
-        /// customDropTable: tabela específica do monstro. Se null, usa a global.
-        /// guaranteedDrops: itens garantidos (ex: quest drops).
+        /// Sorteia drops para um monstro morto.
+        /// guaranteedDrops são sempre spawnados (independente de chance).
         /// </summary>
         [Server]
         public void ServerSpawnDrop(
-            Vector3          position,
-            float            dropChance      = 50f,
-            List<ItemData>   customDropTable = null,
-            List<string>     guaranteedDrops = null)
+            Vector3        position,
+            float          dropChance      = 50f,
+            List<ItemData> customDropTable = null,
+            List<string>   guaranteedDrops = null)
         {
             if (!NetworkServer.active) return;
 
             if (worldItemPrefab == null)
             {
-                Debug.LogWarning("[ItemDropManager] worldItemPrefab não configurado!");
+                Debug.LogWarning("[ItemDropManager] worldItemPrefab não configurado.");
                 return;
             }
 
-            // Drops garantidos (independente de chance)
+            int dropIndex = 0;
+
+            // Drops garantidos
             if (guaranteedDrops != null)
             {
                 for (int i = 0; i < guaranteedDrops.Count; i++)
                 {
-                    Vector3 pos = ScatterPosition(position, i);
+                    Vector3 pos = ScatterPosition(position, dropIndex++);
                     SpawnWorldItem(pos, guaranteedDrops[i]);
                 }
             }
 
-            // Drop aleatório baseado em chance
+            // Drop aleatório
             if (Random.Range(0f, 100f) > dropChance) return;
 
             var table = (customDropTable != null && customDropTable.Count > 0)
@@ -82,50 +75,48 @@ namespace RPG.Managers
             string droppedId = ItemDatabase.RollDrop(table);
             if (!string.IsNullOrEmpty(droppedId))
             {
-                Vector3 pos = ScatterPosition(position, guaranteedDrops?.Count ?? 0);
+                Vector3 pos = ScatterPosition(position, dropIndex);
                 SpawnWorldItem(pos, droppedId);
             }
         }
 
         /// <summary>
-        /// BUG-07 CORRIGIDO: verifica ItemDatabase ANTES de Instantiate.
-        /// Evita memory leak de GameObjects órfãos no servidor quando o
-        /// banco de itens não está carregado ou o item não existe.
+        /// Valida o item ANTES de instanciar para evitar memory leak.
         /// </summary>
         [Server]
         private void SpawnWorldItem(Vector3 position, string itemId)
         {
             if (string.IsNullOrEmpty(itemId)) return;
 
-            // CORREÇÃO: check completo ANTES de qualquer alocação de objeto
             if (ItemDatabase.Instance == null)
             {
-                Debug.LogWarning($"[ItemDropManager] ItemDatabase.Instance é null. Drop '{itemId}' ignorado.");
+                Debug.LogWarning($"[ItemDropManager] ItemDatabase.Instance nulo. Drop '{itemId}' ignorado.");
                 return;
             }
 
             if (!ItemDatabase.Instance.Contains(itemId))
             {
-                Debug.LogWarning($"[ItemDropManager] Item '{itemId}' não está no ItemDatabase. Drop ignorado.");
+                Debug.LogWarning($"[ItemDropManager] Item '{itemId}' não existe no banco. Ignorado.");
                 return;
             }
 
-            // Só agora instancia — todas as validações passaram
             var go   = Instantiate(worldItemPrefab, position, Quaternion.identity);
             var item = go.GetComponent<RPG.Network.WorldItem>();
 
             if (item == null)
             {
-                Debug.LogError("[ItemDropManager] worldItemPrefab não tem WorldItem component!");
-                Destroy(go); // destrói para não vazar
+                Debug.LogError("[ItemDropManager] worldItemPrefab não tem WorldItem component.");
+                Destroy(go);
                 return;
             }
 
             item.ServerInitialize(itemId);
             NetworkServer.Spawn(go);
-            Debug.Log($"[ItemDropManager] Drop spawnado: {itemId} em {position}");
         }
 
+        /// <summary>
+        /// Distribui drops em padrão de espiral (ângulo dourado).
+        /// </summary>
         private Vector3 ScatterPosition(Vector3 center, int index)
         {
             if (index == 0) return center + Vector3.up * spawnHeightOffset;

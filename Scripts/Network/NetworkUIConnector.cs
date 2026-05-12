@@ -6,29 +6,25 @@ using RPG.Character;
 namespace RPG.Network
 {
     /// <summary>
-    /// NetworkUIConnector v3 — conecta UIManager ao player local.
-    ///
-    /// CORREÇÃO v3:
-    ///   - Removido NetworkClient.OnSpawnedObject (não existe no Mirror)
-    ///   - Mantido fluxo simples e seguro usando TryConnect + retry leve
+    /// Conecta o UIManager ao PlayerEntity local quando ele chega.
+    /// Em multiplayer o player spawna depois da UI existir, então fazemos
+    /// retry leve até a conexão.
     /// </summary>
     public class NetworkUIConnector : MonoBehaviour
     {
-        private bool _connected;
+        private const float RETRY_INTERVAL = 0.5f;
+
+        private bool  _connected;
         private float _retryTimer;
 
-        private void Start()
-        {
-            TryConnect();
-        }
+        private void Start() => TryConnect();
 
         private void Update()
         {
             if (_connected) return;
 
-            // retry leve (sem custo alto)
             _retryTimer += Time.deltaTime;
-            if (_retryTimer >= 0.5f)
+            if (_retryTimer >= RETRY_INTERVAL)
             {
                 _retryTimer = 0f;
                 TryConnect();
@@ -50,7 +46,7 @@ namespace RPG.Network
             }
             else
             {
-                // evita múltiplos binds
+                // Evita múltiplos binds caso entre aqui várias vezes
                 playerEntity.OnInitialized -= OnPlayerInitialized;
                 playerEntity.OnInitialized += OnPlayerInitialized;
             }
@@ -60,7 +56,7 @@ namespace RPG.Network
         {
             if (_connected) return;
 
-            var playerEntity = NetworkClient.localPlayer.GetComponent<PlayerEntity>();
+            var playerEntity = NetworkClient.localPlayer?.GetComponent<PlayerEntity>();
             if (playerEntity != null)
                 BindUI(playerEntity);
         }
